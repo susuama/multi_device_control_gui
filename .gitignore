@@ -1,0 +1,30 @@
+# Python: virtual environments and bytecode
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Python: test, lint, and coverage output
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Frontend: dependencies and generated builds
+/frontend/node_modules/
+/frontend/dist/
+/frontend/dist-design-demo/
+*.tsbuildinfo
+
+# Local environment settings (keep the shared example)
+.env
+.env.*
+!.env.example
+
+# Logs and OS metadata
+*.log
+.DS_Store
+Thumbs.db
+Desktop.ini

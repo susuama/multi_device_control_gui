@@ -1,0 +1,9 @@
+# Windows / Python 3.13 (64-bit)
+fastapi==0.141.1
+pydantic==2.13.4
+uvicorn[standard]==0.54.0
+pywebview==6.2.1
+rich==14.2.0
+
+# Starletteなどが使用する依存。TLS・プロセス処理の修正を含む版に固定する。
+anyio==4.14.2

@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# FastAPI TestClientによる回帰テスト用
+httpx==0.28.1
