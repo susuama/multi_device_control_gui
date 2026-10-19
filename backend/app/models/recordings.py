@@ -3,11 +3,12 @@
 """
 
 from pydantic import BaseModel
+from pathlib import Path
 
 class StartRecordingRequest(BaseModel):
     """保存開始リクエストのデータ型。"""
-    directory: str
-    name: str | None = None
+    directory: str | Path       # 保存先の親フォルダ
+    name: str | None = None     # 記録フォルダ名
 
 class RecordingStatus(BaseModel):
     """ 保存状態を表すデータ型。"""

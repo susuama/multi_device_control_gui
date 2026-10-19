@@ -18,7 +18,7 @@
 - set_settings(settings)
 
 - read()
-- start_sampling(queue, on_stopped=None)
+- start_sampling(queue)
 - stop_sampling()
 
 必須データ型
@@ -26,7 +26,8 @@
 - DeviceInfo                get_info()の返り値の型
 - (device-type)Settings     settingsの型。デバイスタイプごとに定義する。
 
-- (device-type)Sample       read()の返り値の型。デバイスタイプごとに定義する。
+- DeviceData                read()の返り値と設定通知の共通型。
+                            typeはsample（取得データ）またはsettings（設定通知）。
 
 データの取得時間は get_counter_ns() を用いる
 from backend.app.utils.time_utils import get_counter_ns
@@ -34,10 +35,11 @@ from backend.app.utils.time_utils import get_counter_ns
 import math
 import time
 import threading
+from typing import Any
 
 # データ型
 from backend.app.models.devices import DeviceInfo, DiscoveredDevice, PowerMeterSettings
-from backend.app.models.measurement import PowerSample
+from backend.app.models.measurement import DeviceData
 
 # ユーティリティ
 from backend.app.utils.time_utils import get_counter_ns
@@ -108,6 +110,8 @@ class DummyPowerMeter:
         self._stop_event = threading.Event()    # データ取得停止フラグ
         self._sampling_thread = None            # データ取得スレッド
         self._state_lock = threading.RLock()    # 取得開始・停止と接続状態の変更が、別のAPI要求で重ならないようにする。
+        self._io_lock = threading.RLock()       # データ取得・設定変更とQueueへの追加を順番に実行する。
+        self.data_queue = None                 # サンプリング中に使用する共通Queue。
 
         # ロガー
         self.logger = setup_logger(__class__.__name__)
@@ -225,43 +229,57 @@ class DummyPowerMeter:
         # ...
 
         # ここでは、ダミーのデバイス設定を返す
-        return self.settings
+        with self._io_lock:
+            return self.settings
 
     def set_settings(
         self,
-        settings: PowerMeterSettings,
+        settings: PowerMeterSettings | dict[str, Any],
     ) -> PowerMeterSettings:
         """新しい設定を適用する。
 
         Args:
-            settings (PowerMeterSettings): 新しい設定。
+            settings (PowerMeterSettings | dict[str, Any]): 新しい設定一式。
 
         Returns:
             return (PowerMeterSettings): 適用後の設定。
         """
-        self.settings = settings
-        return self.settings
+        # 辞書を設定モデルへ変換し、必須項目と値の型を検証する。
+        validated = PowerMeterSettings.model_validate(settings)
+        with self._io_lock:
+            # 適用後の設定を保持し、サンプリング中は設定通知をQueueへ追加する。
+            self.settings = validated
+            self._put_settings()
+            return self.settings
+
+    def _put_settings(self) -> None:
+        """サンプリング中のQueueへ、現在の設定とカウンタ時刻を追加する。"""
+        if self.data_queue is not None and not self._stop_event.is_set():
+            self.data_queue.put(DeviceData(
+                id=self.device_id,
+                type="settings",
+                timestamp_ns=get_counter_ns(),
+                data=self.settings.model_dump(mode="json"),
+            ))
 
     # ..........................................
     
-    def read(self) -> PowerSample:
+    def read(self) -> DeviceData:
         """
         パワー値を取得する。
         """
-        if self.connected is False:
-            raise RuntimeError("Device is not connected.")
-        
-        self.amplitude = 1.0
-        power_w = self.amplitude * math.sin(time.perf_counter())        # デモ用のサイン波を返す
-        timestamp_ns = get_counter_ns()
+        with self._io_lock:
+            if self.connected is False:
+                raise RuntimeError("Device is not connected.")
 
-        p = PowerSample(
-            id=self.device_id,
-            timestamp_ns=timestamp_ns, 
-            power_w=power_w
-        )
-
-        return p
+            self.amplitude = 1.0
+            power_w = self.amplitude * math.sin(time.perf_counter())  # デモ用のサイン波を返す
+            return DeviceData(
+                id=self.device_id,
+                type="sample",
+                timestamp_ns=get_counter_ns(),
+                data={"power_w": power_w},
+            )
 
     # ..........................................
 
@@ -287,11 +305,15 @@ class DummyPowerMeter:
             if not self.connected or self.last_error:
                 raise RuntimeError("Device is not connected.")
 
-            # データ取得スレッドを開始
-            self._stop_event.clear()
+            # 共通Queueを保持し、最初の取得データより前に現在の設定を追加する。
+            with self._io_lock:
+                self.data_queue = queue
+                self._stop_event.clear()
+                self._put_settings()        # 現在の設定をQueueへ追加する
+
+            # データ取得スレッドを作成して開始する
             self._sampling_thread = threading.Thread(
                 target=self._sample_data,
-                args=(queue, ),
                 name=f"sampling-{self.device_id}",
             )
             self._sampling_thread.start()
@@ -316,6 +338,10 @@ class DummyPowerMeter:
 
                 self._sampling_thread = None
 
+            # 取得スレッドの終了後に共通Queueの参照を初期化
+            with self._io_lock:
+                self.data_queue = None
+
     def is_sampling(self) -> bool:
         """
         データ取得中かどうかを返す。
@@ -327,19 +353,21 @@ class DummyPowerMeter:
             thread = self._sampling_thread
             return thread is not None and thread.is_alive()
 
-    def _sample_data(self, queue) -> None:
+    def _sample_data(self) -> None:
         """
         データ取得スレッドの処理。
         """
         try:
             while not self._stop_event.is_set():
-                # データ取得
-                sample = self.read()
-
-                # データなしの場合、エラーにする
-                if sample is None:
-                    raise ValueError("Device returned no sample.")
-                queue.put(sample)
+                # セッティング変更とデータ取得の不整合を避けるため、
+                # データ取得からQueueへの追加までを同じI/O用Lock内で実行する。
+                with self._io_lock:
+                    if self._stop_event.is_set():
+                        break
+                    sample = self.read()
+                    if sample is None:
+                        raise ValueError("Device returned no sample.")
+                    self.data_queue.put(sample)
                 self._stop_event.wait(0.1)
                 
         except Exception as exc:

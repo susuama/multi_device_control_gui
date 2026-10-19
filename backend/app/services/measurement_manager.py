@@ -5,12 +5,19 @@ websocket通信などを管理するクラス。
 非同期処理自体はdriver側で行う。
 MeasurementManagerでは、それらの非同期処理の管理、
 全データをself.data_queueに集約し、保存・解析・websocket送信などを行う。
+
+self.data_queue を監視する processorスレッドがある
+start_recording()が実行されるとデータをDataRecorder()クラスに渡す。
+DataRecorder()は、このprocessorスレッドから呼び出されてファイルへ書き込む。
 """
 
 import queue
 import threading
-from dataclasses import dataclass, field
+from copy import deepcopy
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
 
+from backend.app.models.measurement import DeviceData
 from backend.app.services.data_racorder import DataRecorder
 
 from backend.app.utils.time_utils import (
@@ -25,11 +32,25 @@ from backend.app.utils.logging_utils import setup_logger
 @dataclass
 class RecordingCommand:
     """Queueに渡す記録開始・終了命令。"""
-    action: str
-    directory: str | None = None
-    name: str | None = None
-    done: threading.Event = field(default_factory=threading.Event)
-    error: Exception | None = None
+    action: str                         # start / stop : 記録の開始・終了
+    directory: str | None = None        # 保存先フォルダ
+    name: str | None = None             # 保存フォルダ名
+    device_ids: tuple[str, ...] = ()    # 記録開始命令を送った時点で取得中のデバイスID
+    done: threading.Event = field(default_factory=threading.Event)  # 命令完了フラグ
+    error: Exception | None = None      # エラーを格納
+
+
+@dataclass
+class Metadata:
+    """測定のメタデータ。記録設定やデバイスごとの設定を保持する。"""
+    name: str | None = None     # 保存フォルダ名
+    path: str | None = None     # 保存フォルダパス
+    measurement_started_at: datetime | None = None   # elapsed_sの基準となる測定開始日時
+    measurement_start_counter_ns: int | None = None  # elapsed_sの基準カウンタ [ns]
+    recording_started_at: datetime | None = None     # 記録開始日時
+    recording_stopped_at: datetime | None = None     # 記録終了日時
+    # キーはデバイスID、値は時刻・info・settingsを格納する履歴のリスト。
+    devices: dict[str, list[dict[str, object]]] = field(default_factory=dict)
 
 
 class MeasurementManager:
@@ -46,9 +67,11 @@ class MeasurementManager:
 
         # threading関連
         self.data_queue = queue.Queue()             # 測定データを受け取る共通Queue
+        self.latest_settings: dict[str, DeviceData] = {}  # 記録開始時の初期状態に使う最新の設定通知
         self._processor_thread = None               # Queueを監視するスレッド
         self._state_lock = threading.RLock()        # APIからの開始・停止処理を同期する
         self._recording_lock = threading.Lock()     # 記録開始・終了命令の重複実行を防ぐ
+        self._metadata_lock = threading.Lock()      # メタデータの読み取りと履歴への追記を同期する
     
         # 監視スレッドへのシグナル。
         # シグナルをself.data_queueに入れることで、監視スレッドに命令を送る
@@ -57,7 +80,10 @@ class MeasurementManager:
         # DataRecorderの初期化
         self._data_recorder = DataRecorder()
 
-        # 測定開始時刻
+        # メタデータの初期化
+        self._metadata = Metadata()
+
+        # サンプリング開始時刻。elapsed_sの基準になる。
         self._start_counter_ns: int | None = None
         self._start_datetime = None
 
@@ -67,7 +93,106 @@ class MeasurementManager:
         # Queue監視スレッドを起動
         self._start_processor()
 
+    def get_metadata(self) -> Metadata:
+        """保持している記録情報とデバイス履歴のコピーを返す。"""
+        with self._metadata_lock:
+            return deepcopy(self._metadata)
+
+    def _add_device_metadata(
+        self,
+        device_id: str,
+        timestamp_ns: int,
+        info: dict[str, object] | None = None,
+        settings: dict[str, object] | None = None,
+    ) -> None:
+        """指定時刻の情報・設定をコピーし、デバイスの履歴へ追記する。"""
+        try:
+            # 引数に含まれていない情報・設定だけをデバイスから取得する。
+            if info is None or settings is None:
+                device = self.device_manager.get(device_id)
+                if info is None:
+                    info = device.get_info().model_dump(mode="json")
+                if settings is None:
+                    settings = device.get_settings().model_dump(mode="json")
+
+            entry = {
+                "timestamp_ns": timestamp_ns,
+                "info": deepcopy(info),
+                "settings": deepcopy(settings),
+            }
+            with self._metadata_lock:
+                self._metadata.devices.setdefault(device_id, []).append(entry)
+        except Exception as exc:
+            raise RuntimeError(f"Could not collect metadata for device {device_id}: {exc}") from exc
+
+    def _initialize_metadata(self, device_ids: tuple[str, ...]) -> None:
+        """
+        metadataを初期化する。
+        今回の記録情報と、対象デバイスの初期設定をメタデータに格納する。
+        """
+        status = self._data_recorder.get_status()
+        with self._metadata_lock:
+            # 保存先と時刻を設定し、前回の記録の履歴を初期化する。
+            self._metadata = Metadata(
+                name=status.name,
+                path=status.directory,
+                measurement_started_at=self._start_datetime,
+                measurement_start_counter_ns=self._start_counter_ns,
+                recording_started_at=get_datetime(),
+            )
+
+        # 開始命令より前に受信した最新の設定通知を、初期状態として追加する。
+        for device_id in device_ids:
+            notification = self.latest_settings.get(device_id)
+            if notification is None:
+                raise RuntimeError(f"No settings received for device {device_id}.")
+            self._add_device_metadata(
+                device_id, notification.timestamp_ns, settings=notification.data,
+            )
+
+    def _save_metadata(self) -> None:
+        """メタデータをJSON対応の辞書へ変換し、記録フォルダへ保存する。"""
+        with self._metadata_lock:
+            metadata = asdict(self._metadata)
+
+        # 日時をタイムゾーン付きのISO形式へ変換し、未設定の値はNoneのまま渡す。
+        for key, value in metadata.items():
+            if isinstance(value, datetime):
+                metadata[key] = value.isoformat()
+        self._data_recorder.write_metadata(metadata)
+
+    def _finish_recording(self, error: Exception | None = None) -> None:
+        """記録を停止し、終了日時を含むメタデータを保存する。"""
+        if error is not None:
+            self._data_recorder.error = str(error) or type(error).__name__
+
+        with self._metadata_lock:
+            # 終了日時が未設定の記録だけを更新し、繰り返しの停止では変更しない。
+            save_metadata = (
+                self._metadata.recording_started_at is not None
+                and self._metadata.recording_stopped_at is None
+            )
+            if save_metadata:
+                self._metadata.recording_stopped_at = get_datetime()
+
+        try:
+            self._data_recorder.stop()
+        finally:
+            # CSVを閉じた後に、今回の記録の最終メタデータを保存する。
+            if save_metadata:
+                self._save_metadata()
+
+
     # ========================== Sampling ==========================
+    # デバイスのデータ取得を開始・停止する。
+    #
+    # ここでは、デバイスへ共通データQueueを渡してデータ取得を開始・停止の命令を送るだけ 
+    #   データの非同期取得は device クラス 
+    #   Queueデータの処理は processor スレッド
+    #   にそれぞれ委譲する。
+    # 
+    # サンプリングを追加しただけでは、データは保存されない。
+    # 保存するには、サンプリングデバイスを追加後にdata_recorder.start_recording()を呼び出す必要がある。
 
     def start_sampling(self, device_id: str) -> None:
         """指定されたデバイスのデータ取得を開始する。"""
@@ -81,14 +206,14 @@ class MeasurementManager:
             # Processorが停止していた場合は再起動する
             self._start_processor()
 
-            # 最初のデバイスを開始するときに共通の測定開始時刻を設定する
+            # 最初のデバイスを開始するときに共通のサンプリング開始時刻を設定する
             if not self._is_any_device_sampling():
                 # 前回測定のデータが残っている場合は処理完了を待つ
                 self.data_queue.join()
                 if not self._data_recorder.is_recording():
-                    self._start_counter_ns = get_counter_ns()
-                    self._start_datetime = get_datetime()
-
+                    self._start_counter_ns = get_counter_ns()   # サンプリング開始時刻のカウンタ [ns]
+                    self._start_datetime = get_datetime()       # サンプリング開始時刻の実日時
+    
             try:
                 # デバイスのデータ取得を開始する
                 device.start_sampling(self.data_queue)
@@ -143,20 +268,38 @@ class MeasurementManager:
         return False
 
     # ========================== recording ==========================
+    # サンプリング中のデータを保存する
+    # 一つのフォルダ内にデバイスごとのデータとメタデータを保存する。
+    #
+    # ここでは、保存開始・停止の命令をqueue監視スレッドへ送るだけ
+    # 保存処理はDataRecorder()クラスに委譲する。
+
     def start_recording(self, directory: str, name: str | None = None) -> None:
         """記録を開始する。"""
         with self._recording_lock:
             with self._state_lock:
-                if not self._is_any_device_sampling():
+                # 開始命令を送る時点で取得中のデバイスIDを取り出す。
+                device_ids = tuple(
+                    device_id for device_id, device in self.device_manager.get_all().items()
+                    if device.is_sampling()
+                )
+                # 取得中デバイスが一つもないとき
+                if not device_ids:
                     raise RuntimeError("No device is sampling. Cannot start recording.")
+                # すでに記録用のDataRecorder()が起動しているとき
                 if self._data_recorder.is_recording():
                     raise RuntimeError("Recording has already started.")
+                # queue監視スレッドが停止しているとき
                 if not self._is_processor_running():
                     raise RuntimeError("Processor is not running.")
 
-                command = RecordingCommand(action="start", directory=directory, name=name)
+                # queueを通じてqueue監視スレッドへ記録開始と設定の命令を送る
+                command = RecordingCommand(
+                    action="start", directory=directory, name=name, device_ids=device_ids,
+                )
                 self.data_queue.put(command)
 
+            # 記録が開始するまで待機する
             self._wait_recording_command(command)
 
     def stop_recording(self) -> None:
@@ -169,7 +312,12 @@ class MeasurementManager:
             self._wait_recording_command(command)
 
     def _wait_recording_command(self, command: RecordingCommand) -> None:
-        """Processorによる記録命令の完了を待つ。"""
+        """
+        Processorによる記録命令の完了を待つ。
+        
+        RecordingCommandデータクラスのdoneにはスレッドイベントオブジェクトが格納される
+        queue監視スレッド内で命令が完了したらこのフラグが立つ
+        """
         while not command.done.wait(timeout=0.5):
             if not self._is_processor_running():
                 raise RuntimeError("Processor stopped before completing recording command.")
@@ -187,6 +335,19 @@ class MeasurementManager:
             return self._data_recorder.get_status()
 
     # ========================== Processor ==========================
+    # queue監視スレッド
+    # クラス初期化時からシャットダウンまで、デバイスが存在していなくても常に起動している
+    #
+    # 監視デバイスの追加 : MeasurementManager.start_sampling()
+    #   websocket通信や解析処理などが実行される
+    # ↓
+    # データの保存 : MeasurementManager.start_recording()
+    #
+    # 初回の監視デバイス追加時に、共通のサンプリング開始時刻を設定する
+    #   self._start_counter_ns      # サンプリング開始時刻のカウンタ [ns]
+    #   self._start_datetime        # サンプリング開始時刻の実日時
+    #
+    # デバイスは timestamp_ns のみを返し、サンプリング開始時のカウンタ時刻を基準にして、経過時間や実時間を計算できる
 
     def _start_processor(self) -> None:
         """Queue監視スレッドを起動する。すでに起動している場合は何もしない。"""
@@ -232,36 +393,78 @@ class MeasurementManager:
                     # Processor終了のシグナルを受け取った場合はループを抜ける
                     if data is self._stop_signal:
                         break
-                    # ------------ recording ------------
-                    # 保存開始・終了命令
+                    
+                    # recording：保存開始・終了命令
                     if isinstance(data, RecordingCommand):
                         try:
                             if data.action == "start":
                                 self._data_recorder.start(data.directory, data.name)
+                                try:
+                                    # 今回の初期状態を作成し、最初のサンプル保存前にJSONを作成する。
+                                    self._initialize_metadata(data.device_ids)
+                                    self._save_metadata()
+                                except Exception as exc:
+                                    self._finish_recording(error=exc)
+                                    raise
                             elif data.action == "stop":
-                                self._data_recorder.stop()
+                                self._finish_recording()
                             else:
                                 raise ValueError(f"Unknown recording action: {data.action}")
                         except Exception as exc:
                             data.error = exc
                         finally:
-                            data.done.set()
+                            data.done.set()     # 完了フラグを立てる
                         continue
 
-                    # 保存・解析・WebSocket送信など
-                    # self._process_data(data)
+                    # デバイスからの取得データ・設定通知を確認
+                    if not isinstance(data, DeviceData):
+                        raise TypeError("Expected DeviceData from device.")
+                    if data.type not in {"sample", "settings"}:
+                        raise ValueError(f"Unknown device data type: {data.type}")
 
-                    device_id = data.id
+                    # ====================================================
+
+                    # データを整形
+                    device_id    = data.id
                     timestamp_ns = data.timestamp_ns
-                    elapsed_s = self._get_elapsed(timestamp_ns)
-                    datetime = self._get_datetime(timestamp_ns)
+                    elapsed_s    = self._get_elapsed(timestamp_ns)
+                    datetime     = self._get_datetime(timestamp_ns)
 
-                    # 保存中の場合はDataRecorderにデータを渡す
+                    # 最新の設定通知を保持し、記録中は履歴への追記とJSONの更新を行う。
+                    if data.type == "settings":
+                        self.latest_settings[device_id] = deepcopy(data)
+                        if self._data_recorder.is_recording():
+                            try:
+                                self._add_device_metadata(device_id, timestamp_ns, settings=data.data)
+                                self._save_metadata()
+                            except Exception as exc:
+                                self._finish_recording(error=exc)
+                                raise
+                        self.logger.debug(
+                            "Received settings: id=%s timestamp=%s elapsed=%s datetime=%s settings=%s",
+                            device_id, timestamp_ns, elapsed_s, datetime, data.data,
+                        )
+                        continue
+
+                    # ====== 記録中はDataRecorderにデータを渡す ======
                     if self._data_recorder.is_recording():
-                        self._data_recorder.write(data, elapsed_s=elapsed_s)
+                        try:
+                            self._data_recorder.write(data, elapsed_s=elapsed_s)
+                        except Exception as exc:
+                            # CSVの保存に失敗した場合も、終了日時をメタデータへ保存する。
+                            self._finish_recording(error=exc)
+                            raise
 
+
+                    # ============================================
+                    # 解析・WebSocket送信などを追加予定
+                    # self._process_data(data)
+                    # ============================================
+
+
+                    # データのログ出力
                     self.logger.debug(
-                        "Processed data: id=%s timestamp=%s elapsed=%s datetime=%s data=%s",
+                        "Processed data: id=%s\n timestamp=%s\n elapsed=%s\n datetime=%s\n data=%s\n",
                         device_id,
                         timestamp_ns,
                         elapsed_s,
@@ -278,8 +481,8 @@ class MeasurementManager:
 
         finally:
             try:
-                # 保存中にProcessorが終了した場合は、保存を終了する
-                self._data_recorder.stop()
+                # Processorの終了時にも、CSVを閉じて最終メタデータを保存する。
+                self._finish_recording()
             finally:
                 with self._state_lock:
                     self._processor_thread = None

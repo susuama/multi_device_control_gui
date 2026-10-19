@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, field_validator
 
 from backend.app.devices.power_meter.dummy_power_meter import DummyPowerMeter
 from backend.app.main import create_app
@@ -273,9 +274,14 @@ class DeviceDisconnectTests(unittest.TestCase):
         for method, suffix in (("GET", ""), ("POST", "/connect"), ("POST", "/disconnect")):
             self.assertEqual(404, self.client.request(method, "/api/devices/unknown" + suffix).status_code)
 
-    def test_device_settings_api_returns_not_implemented(self):
-        # 有効な機器ID・設定値で呼び出した場合も、未実装であることを明示する。
+    def test_device_settings_api_returns_and_updates_settings(self):
+        # 現在の設定を取得し、設定一式の更新結果をAPIとデバイスの両方から確認する。
         path = f"/api/devices/{self.ids[0]}/settings"
+        original = self.dm.get_settings(self.ids[0]).model_dump(mode="json")
+        response = self.client.get(path)
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(original, response.json())
+
         settings = {
             "wavelength": 800,
             "range": 0.1,
@@ -283,14 +289,76 @@ class DeviceDisconnectTests(unittest.TestCase):
             "bandwidth": "low",
             "averaging": 1,
         }
-        for method, options, detail in (
-            ("GET", {}, "Device settings retrieval is not implemented."),
-            ("PUT", {"json": settings}, "Device settings update is not implemented."),
-        ):
+        response = self.client.put(path, json=settings)
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(settings, response.json())
+        self.assertEqual(settings, self.client.get(path).json())
+        self.assertEqual(settings, self.dm.get_settings(self.ids[0]).model_dump(mode="json"))
+
+    def test_device_settings_api_returns_404_for_unknown_device(self):
+        settings = self.dm.get_settings(self.ids[0]).model_dump(mode="json")
+        for method, options in (("GET", {}), ("PUT", {"json": settings})):
             with self.subTest(method=method):
-                response = self.client.request(method, path, **options)
-                self.assertEqual(501, response.status_code)
-                self.assertEqual({"detail": detail}, response.json())
+                response = self.client.request(method, "/api/devices/unknown/settings", **options)
+                self.assertEqual(404, response.status_code)
+                self.assertEqual({"detail": "Device not found"}, response.json())
+
+    def test_invalid_settings_return_422_without_changing_device(self):
+        path = f"/api/devices/{self.ids[0]}/settings"
+        original = self.dm.get_settings(self.ids[0]).model_dump(mode="json")
+        for settings in (
+            {"wavelength": 650.0},
+            {**original, "averaging": "invalid"},
+            {**original, "wave_length": 650.0},
+            [],
+            "invalid",
+        ):
+            with self.subTest(settings=settings):
+                response = self.client.put(path, json=settings)
+                self.assertEqual(422, response.status_code, response.text)
+                self.assertTrue(all(error["loc"][0] == "body" for error in response.json()["detail"]))
+                self.assertEqual(original, self.dm.get_settings(self.ids[0]).model_dump(mode="json"))
+
+    def test_device_settings_api_returns_operation_failures(self):
+        path = f"/api/devices/{self.ids[0]}/settings"
+        settings = self.dm.get_settings(self.ids[0]).model_dump(mode="json")
+        with patch.object(self.devices[0], "get_settings", side_effect=OSError("settings read failed")):
+            response = self.client.get(path)
+            self.assertEqual(503, response.status_code)
+            self.assertEqual({"detail": "settings read failed"}, response.json())
+        with patch.object(self.devices[0], "set_settings", side_effect=OSError("settings update failed")):
+            response = self.client.put(path, json=settings)
+            self.assertEqual(503, response.status_code)
+            self.assertEqual({"detail": "settings update failed"}, response.json())
+
+    def test_settings_api_handles_another_devices_settings_model(self):
+        class SensorSettings(BaseModel):
+            enabled: bool
+            offsets: list[float]
+
+            @field_validator("offsets")
+            @classmethod
+            def validate_offsets(cls, value):
+                if not value:
+                    raise ValueError("offsets must not be empty")
+                return value
+
+        path = f"/api/devices/{self.ids[0]}/settings"
+        initial = SensorSettings(enabled=True, offsets=[0.0])
+        settings = {"enabled": False, "offsets": [1.5, 2.5]}
+        # デバイスの設定メソッドを別のモデルへ差し替え、共通APIの入出力を確認する。
+        with patch.object(self.devices[0], "get_settings", return_value=initial), patch.object(
+            self.devices[0], "set_settings", side_effect=SensorSettings.model_validate,
+        ):
+            self.assertEqual(initial.model_dump(mode="json"), self.client.get(path).json())
+            response = self.client.put(path, json=settings)
+            self.assertEqual(200, response.status_code, response.text)
+            self.assertEqual(settings, response.json())
+
+            # 検証エラーにValueErrorが含まれる場合も、JSON形式の422応答を返す。
+            response = self.client.put(path, json={"enabled": True, "offsets": []})
+            self.assertEqual(422, response.status_code, response.text)
+            self.assertEqual(["body", "offsets"], response.json()["detail"][0]["loc"])
 
     def test_device_api_returns_operation_failures(self):
         # 接続・スキャン・停止の失敗を、理由付きの503応答として返すことを確認する。

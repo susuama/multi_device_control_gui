@@ -18,6 +18,9 @@ htmlcov/
 /frontend/dist-design-demo/
 *.tsbuildinfo
 
+# テスト実行で生成するCSV・メタデータ
+/backend/tests/output/
+
 # Local environment settings (keep the shared example)
 .env
 .env.*

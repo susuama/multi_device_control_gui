@@ -11,7 +11,7 @@ API通信時のデバイス情報の型を定義
 
 
 from typing import Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class DeviceInfo(BaseModel):
@@ -50,6 +50,9 @@ class CameraSetting(BaseModel):
 
 class PowerMeterSettings(BaseModel):
     """パワーメータ固有の属性"""
+    # 定義されていない設定名を受け取ると、検証エラーにする。
+    model_config = ConfigDict(extra="forbid")
+
     wavelength: float   # 波長 (nm)
     range: float        # 測定範囲 (W)
     auto_range: bool    # 自動レンジ切替の有無

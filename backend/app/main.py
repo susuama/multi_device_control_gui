@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from backend.app.api.status  import router as status_router
 from backend.app.api.devices import router as device_router
 from backend.app.api.windows import router as window_router
+from backend.app.api.recordings import router as recording_router
 
 # デバイスの管理を行うサービス群
 from backend.app.services.device_manager import DeviceManager
@@ -70,6 +71,7 @@ def create_app() -> FastAPI:
     app.include_router(status_router)
     app.include_router(window_router)
     app.include_router(device_router)
+    app.include_router(recording_router)
 
     return app
 
