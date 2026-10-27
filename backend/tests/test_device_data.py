@@ -14,6 +14,7 @@ from unittest.mock import patch
 from backend.app.devices.power_meter.dummy_power_meter import DummyPowerMeter
 from backend.app.models.measurement import DeviceData
 from backend.app.services.device_manager import DeviceManager
+from backend.app.services.event_broadcaster import EventBroadcaster
 from backend.app.services.measurement_manager import MeasurementManager
 from backend.app.utils.time_utils import get_counter_ns
 
@@ -25,7 +26,7 @@ class DeviceDataTests(unittest.TestCase):
         self.addCleanup(logging.disable, previous_logging_disable)
         self.directory = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="device-data-tests-")))
         self.dm = DeviceManager([DummyPowerMeter])
-        self.mm = MeasurementManager(self.dm)
+        self.mm = MeasurementManager(self.dm, EventBroadcaster())
         self.dm.scan()
         self.device_id = next(iter(self.dm.get_all()))
         self.device = self.dm.get(self.device_id)

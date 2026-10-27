@@ -12,16 +12,19 @@ URLルーティングは別ファイル（app/api/*.py）にまとめる。
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+import asyncio
 
 # FastAPIのルーティング
 from backend.app.api.status  import router as status_router
 from backend.app.api.devices import router as device_router
 from backend.app.api.windows import router as window_router
 from backend.app.api.recordings import router as recording_router
+from backend.app.api.events  import router as events_router
 
 # デバイスの管理を行うサービス群
 from backend.app.services.device_manager import DeviceManager
 from backend.app.services.measurement_manager import MeasurementManager
+from backend.app.services.event_broadcaster import EventBroadcaster
 
 # 探索対象のデバイスドライバーの一覧
 from backend.app.devices.registry import DEVICE_CLASSES
@@ -36,9 +39,17 @@ async def lifespan(app: FastAPI):
     
     # デバイスの探索と管理を行うインスタンスを初期化
     device_manager      = DeviceManager(device_classes=DEVICE_CLASSES)
-    measurement_manager = MeasurementManager(device_manager=device_manager)
+    event_broadcaster   = EventBroadcaster()
+    measurement_manager = MeasurementManager(
+        device_manager=device_manager, 
+        event_broadcaster=event_broadcaster
+        )
     app.state.device_manager      = device_manager
     app.state.measurement_manager = measurement_manager
+    app.state.event_broadcaster   = event_broadcaster
+
+    # FastAPIのイベントループをEventBroadcasterに登録する。
+    event_broadcaster.start(asyncio.get_running_loop())
 
     try:
         yield
@@ -53,6 +64,9 @@ async def lifespan(app: FastAPI):
 
         # 4. 全デバイスとの接続を切断
         device_manager.shutdown()
+
+        # 5. EventBroadcasterの配信受付を終了
+        event_broadcaster.shutdown()
 
 
 def create_app() -> FastAPI:
@@ -72,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(window_router)
     app.include_router(device_router)
     app.include_router(recording_router)
+    app.include_router(events_router)
 
     return app
 

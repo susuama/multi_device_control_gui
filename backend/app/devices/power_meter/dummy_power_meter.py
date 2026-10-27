@@ -113,7 +113,6 @@ class DummyPowerMeter:
         self._io_lock = threading.RLock()       # データ取得・設定変更とQueueへの追加を順番に実行する。
         self.data_queue = None                 # サンプリング中に使用する共通Queue。
 
-        # ロガー
         self.logger = setup_logger(__class__.__name__)
 
         # デバイス設定の初期化

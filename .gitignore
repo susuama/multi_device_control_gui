@@ -31,3 +31,6 @@ htmlcov/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Local distribution script and generated folders
+/_dist/

@@ -30,7 +30,18 @@ class DataRecorder:
         self.logger = setup_logger(__class__.__name__)
 
     def get_status(self) -> RecordingStatus:
-        """記録状態を返す。"""
+        """記録状態を返す。
+        
+        Args:
+            None
+
+        Returns:
+            RecordingStatus: 記録状態の情報を保持するオブジェクト
+                - is_recording (bool): 記録中かどうか
+                - directory (str | None): 記録フォルダのパス。記録中でなければNone
+                - name (str | None): 記録フォルダの名前。記録中でなければNone
+                - error (str | None): エラーが発生した場合のエラーメッセージ。エラーがなければNone
+        """
         return RecordingStatus(
             is_recording=self._is_recording,
             directory=str(self.directory) if self.directory is not None else None,
@@ -59,20 +70,17 @@ class DataRecorder:
             if Path(recording_name).name != recording_name or recording_name in {".", ".."}:
                 raise ValueError("Recording name must be a single folder name.")
             
-            # 親フォルダを作成
+            # 親フォルダ、保存フォルダを作成。保存フォルダは新規作成のみ。上書きしない。
             parent_directory = Path(directory).expanduser()
-            parent_directory.mkdir(parents=True, exist_ok=True)
             recording_directory = parent_directory / recording_name
-
-            # 保存フォルダを記録ごとに新規作成。上書きしない。
-            recording_directory.mkdir()
+            parent_directory.mkdir(parents=True, exist_ok=True)
+            recording_directory.mkdir(exist_ok=False)
 
             # 記録用のフォルダを設定
             self.directory = recording_directory    # 記録フォルダパス
             self.name = recording_name              # 記録フォルダ名
             self.metadata = {}                      # 今回の記録のメタデータを初期化する
 
-            # 記録の開始
             self._is_recording = True
             
         except Exception as exc:
@@ -95,7 +103,7 @@ class DataRecorder:
 
         temporary_path = None
         try:
-            # 渡された辞書をコピーし、ファイルを開く前にJSON文字列へ変換する。
+            # 渡された辞書をコピーし、JSON文字列へ変換する。
             saved_metadata = deepcopy(metadata)
             contents = json.dumps(saved_metadata, ensure_ascii=False, indent=4)
             metadata_path = Path(self.directory) / "metadata.json"
@@ -103,14 +111,15 @@ class DataRecorder:
             # 同じ記録フォルダ内に一時ファイルを作成し、JSON全体を書き込む。
             with NamedTemporaryFile(
                 mode="w", encoding="utf-8", dir=self.directory,
-                prefix=".metadata-", suffix=".tmp", delete=False,
+                prefix=".metadata-", suffix=".tmp", delete=False,   # withを抜けても一時ファイルは消されない
             ) as file:
                 temporary_path = Path(file.name)
                 file.write(contents)
 
-            # 一時ファイルを閉じてから、直前のmetadata.jsonと置き換える。
+            # 一時ファイルを古いmetadata.jsonと置き換える。
             temporary_path.replace(metadata_path)
             self.metadata = saved_metadata
+
         except Exception as exc:
             self.error = str(exc) or type(exc).__name__
             raise
@@ -132,12 +141,17 @@ class DataRecorder:
             if sample.type != "sample":
                 raise ValueError("Only sample data can be written to CSV.")
             device_id = sample.id
+
             # 共通の識別情報とdata内の測定値をCSVの列へ展開する。
-            row = {"id": device_id, "timestamp_ns": sample.timestamp_ns, **sample.data}
+            row = {
+                "id": device_id, 
+                "timestamp_ns": sample.timestamp_ns, 
+                **sample.data
+            }
             if elapsed_s is not None:
                 row["elapsed_s"] = elapsed_s
 
-            # デバイスごとのCSVファイルを作成する。すでに作成済みなら追記する。
+            # デバイスごとのCSVファイルとCSVライターを新規作成する。
             if device_id not in self._writers:
                 # デバイスIDをファイル名に使えるように変換する
                 safe_id = re.sub(r"[^\w.-]+", "_", device_id).strip("._") or "device"
@@ -158,8 +172,8 @@ class DataRecorder:
                 except Exception:
                     file.close()
                     raise
-                self._files[device_id] = file       # ファイルパスを保持する
-                self._writers[device_id] = writer   # CSVライターを保持する
+                self._files[device_id] = file
+                self._writers[device_id] = writer
                 self.logger.debug("Created CSV file: %s", path)
                 
             # CSVライターを取得して追記する

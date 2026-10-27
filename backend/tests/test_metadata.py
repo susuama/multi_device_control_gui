@@ -13,6 +13,7 @@ from unittest.mock import patch
 from backend.app.devices.power_meter.dummy_power_meter import DummyPowerMeter
 from backend.app.models.measurement import DeviceData
 from backend.app.services.device_manager import DeviceManager
+from backend.app.services.event_broadcaster import EventBroadcaster
 from backend.app.services.measurement_manager import MeasurementManager, Metadata
 from backend.app.utils.time_utils import get_counter_ns
 
@@ -24,7 +25,7 @@ class MetadataTests(unittest.TestCase):
         self.addCleanup(logging.disable, previous_logging_disable)
         self.directory = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="metadata-tests-")))
         self.dm = DeviceManager([DummyPowerMeter])
-        self.mm = MeasurementManager(self.dm)
+        self.mm = MeasurementManager(self.dm, EventBroadcaster())
         self.releases = []
         self.workers = []
         # 一時フォルダを削除する前に、取得・記録・処理スレッドを終了する。

@@ -1,0 +1,84 @@
+/* 採用版A2の共通パレットと寸法。参照デモの見本操作は含めない。 */
+.application {
+    --frame: #161616; --surface: #303030; --header: #303030; --toolbar: #1d1d1d;
+    --control: #545454; --input: #282828; --border: #3d3d3d; --text: #e6e6e6;
+    --muted: #cccccc; --accent: #4772b3; --focus: #8fbeef;
+    --success: #91bb9b; --error: #ed9993; --data-surface: #202020;
+    height: 100dvh; min-height: 180px; color-scheme: dark;
+    color: var(--text); background: var(--frame);
+    font: 11px/1.45 "Segoe UI", "Yu Gothic UI", Meiryo, sans-serif;
+}
+.application.theme-light {
+    --gray-200: #eeeeee; --gray-250: #ececec; --gray-300: #e8e8e8; --gray-400: #dadada;
+    --frame: var(--gray-400); --surface: #f3f3f3; --header: var(--gray-200); --toolbar: var(--gray-300);
+    --control: var(--gray-250); --input: #ffffff; --border: #b8b8b8; --text: #242424;
+    --muted: #505050; --focus: #4772b3; --success: #28663b; --error: #a53832;
+    --data-surface: #fcfcfc; color-scheme: light;
+}
+.application * { box-sizing: border-box; }
+.application button, .application input, .application select, .application textarea { font: inherit; color: inherit; }
+.application button, .application select {
+    height: 20px; border: 1px solid var(--border); border-radius: 4px;
+    padding: 0 8px; background: var(--control); min-width: 0;
+}
+.application button { cursor: pointer; white-space: nowrap; }
+.application button:hover:not(:disabled) { filter: brightness(1.1); }
+.application button:disabled { opacity: .45; cursor: default; }
+.application button:focus-visible, .application select:focus-visible, .application input:focus-visible,
+.application textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.application code, .application textarea, .application .panel-id, .application .response-status {
+    font-family: "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums;
+}
+.workspace-shell { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.workspace-toolbar {
+    min-height: 26px; flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+    padding: 3px 8px; background: var(--toolbar); overflow-x: auto;
+}
+.workspace-toolbar h1 { font-size: 11px; font-weight: 400; margin: 0 auto 0 0; white-space: nowrap; }
+.layout-buttons { display: flex; flex-shrink: 0; }
+.application .layout-buttons button { border-radius: 0; }
+.application .layout-buttons button:first-child { border-radius: 4px 0 0 4px; }
+.application .layout-buttons button:last-child { border-radius: 0 4px 4px 0; }
+.application .layout-buttons button + button { margin-left: -1px; }
+.application .layout-buttons button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #ffffff; }
+.theme-control { display: flex; align-items: center; gap: 8px; flex-shrink: 0; white-space: nowrap; }
+.workspace-grid { flex: 1; min-height: 0; display: grid; gap: 3px; padding: 0 2px 2px; }
+.layout-single { grid-template: minmax(50px, 1fr) / minmax(0, 1fr); }
+.layout-columns { grid-template: minmax(50px, 1fr) / repeat(2, minmax(0, 1fr)); }
+.layout-rows { grid-template: repeat(2, minmax(50px, 1fr)) / minmax(0, 1fr); }
+.workspace-panel {
+    min-width: 0; min-height: 50px; display: flex; flex-direction: column; overflow: hidden;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--surface); container-type: inline-size;
+}
+.workspace-panel-header {
+    height: 26px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 4px;
+    background: var(--header); border-bottom: 1px solid var(--border);
+}
+.workspace-panel-title { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-id { margin-left: auto; font-size: 10px; color: var(--muted); }
+.view-switch { width: 33px; height: 22px; flex-shrink: 0; position: relative; display: flex; align-items: center; justify-content: center; }
+.view-switch select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.view-switch:focus-within { outline: 2px solid var(--focus); border-radius: 4px; }
+.workspace-panel-body { flex: 1; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
+.workspace-panel-footer, .workspace-footer {
+    height: 22px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; justify-content: space-between;
+    padding: 0 8px; background: var(--header); color: var(--muted); border-top: 1px solid var(--border);
+}
+.workspace-footer { border-top: 0; }
+.log-view { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.view-toolbar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; flex-shrink: 0; overflow-x: auto; border-bottom: 1px solid var(--border); }
+.view-toolbar > * { flex-shrink: 0; }
+.view-note { margin-right: auto; color: var(--muted); white-space: nowrap; }
+.follow-tail, .log-display-limit { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.follow-tail input { margin: 0; accent-color: var(--accent); }
+.application .log-text {
+    flex: 1; min-height: 0; width: 100%; border: 0; border-radius: 0; padding: 8px; resize: none;
+    background: var(--data-surface); line-height: 1.65; overflow: auto;
+}
+.log-text::placeholder { color: var(--muted); }
+@media (max-width: 650px) {
+    .workspace-toolbar h1 { display: none; }
+    .workspace-toolbar { gap: 4px; }
+    .theme-control { margin-left: auto; }
+    .workspace-footer > span:last-child { display: none; }
+}

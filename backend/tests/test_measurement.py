@@ -3,6 +3,7 @@
 import time
 
 from backend.app.services.device_manager import DeviceManager
+from backend.app.services.event_broadcaster import EventBroadcaster
 from backend.app.services.measurement_manager import MeasurementManager
 
 from backend.app.devices.registry import DEVICE_CLASSES
@@ -11,7 +12,7 @@ from backend.app.devices.registry import DEVICE_CLASSES
 def main() -> None:
     """ダミー2台の単発取得・連続取得を手動で確認する。"""
     device_manager = DeviceManager(device_classes=DEVICE_CLASSES)
-    measurement_manager = MeasurementManager(device_manager=device_manager)
+    measurement_manager = MeasurementManager(device_manager=device_manager, event_broadcaster=EventBroadcaster())
 
     try:
         device_manager.scan()

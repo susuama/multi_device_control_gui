@@ -1,5 +1,7 @@
+import { logger } from "../logging/logStore.ts";
+
 // Vite の /api プロキシを使い、同じホストにリクエストする。
-export function apiRawRequest(
+export async function apiRawRequest(
     path: string,
     options: RequestInit = {},
 ): Promise<Response> {
@@ -8,7 +10,20 @@ export function apiRawRequest(
         headers.set("Content-Type", "application/json");
     }
 
-    return fetch(path, { ...options, headers });
+    const method = options.method ?? "GET";
+    const startedAt = performance.now();
+    logger.info("api", `${method} ${path} を送信`);
+    try {
+        const response = await fetch(path, { ...options, headers });
+        const message = `${method} ${path} → HTTP ${response.status} (${Math.round(performance.now() - startedAt)} ms)`;
+        if (response.ok) logger.info("api", message);
+        else logger.error("api", message);
+        // 応答本文は消費せず、そのまま呼び出し元へ返す。
+        return response;
+    } catch (cause) {
+        logger.error("api", `${method} ${path} 通信失敗: ${cause instanceof Error ? cause.message : String(cause)}`);
+        throw cause;
+    }
 }
 
 export async function apiRequest<T>(
@@ -31,5 +46,10 @@ export async function apiRequest<T>(
         throw new Error(`HTTP ${response.status}: ${message}`);
     }
 
-    return response.json() as Promise<T>;
+    try {
+        return await response.json() as T;
+    } catch (cause) {
+        logger.error("api", `${path} の応答をJSONとして読み取れませんでした。`);
+        throw cause;
+    }
 }

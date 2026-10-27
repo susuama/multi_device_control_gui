@@ -50,17 +50,13 @@ def main() -> None:
     server_thread.start()
 
     try:
-        # メインウィンドウ作成
+        # メインウィンドウ作成して表示する
         window_manager.create_main_window()
-
-        # pywebviewはメインスレッドで実行
         window_manager.start()
 
     finally:
         # pywebview終了後、FastAPIへ終了要求
         server.should_exit = True
-
-        # FastAPIが終了するまで待つ
         server_thread.join()
 
 
