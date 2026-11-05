@@ -11,7 +11,7 @@ API通信時のデバイス情報の型を定義
 
 
 from typing import Literal
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class DeviceInfo(BaseModel):
@@ -42,9 +42,36 @@ class DiscoveredDevice(BaseModel):
 
 #  ------------デバイスタイプごとの型仕様 ------------
 
+class CameraROI(BaseModel):
+    """元画像の左上を原点とする、ソフトウェア保存用の切り出し範囲。[pixel]"""
+    model_config = ConfigDict(extra="forbid")
+
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+
 class CameraSetting(BaseModel):
-    """カメラ固有の属性"""
-    pass
+    """カメラが保持する撮影条件と保存ROI。画素はモノクロまたはRGB/BGRの各成分8 bit。"""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    width: int = Field(gt=0)        # ROI切り出し前の取得画像の幅 [pixel]。
+    height: int = Field(gt=0)       # ROI切り出し前の取得画像の高さ [pixel]。
+    fps: float = Field(gt=0)        # 機器へ適用された取得FPS。
+    exposure: float = Field(gt=0)   # 露光時間 [s]。
+    gain: float = Field(ge=0)       # 機器へ適用されたゲイン係数。
+    gain_boost: bool = False        # ゲインブーストの有無。
+    pixel_format: Literal["mono8", "rgb24", "bgr24"] = "mono8"
+    roi: CameraROI | None = None    # Noneなら取得画像全体を保存する。
+
+    @model_validator(mode="after")
+    def validate_roi(self) -> "CameraSetting":
+        """保存ROIが取得画像内に収まっていることを確認する。"""
+        if self.roi is not None:
+            if self.roi.x + self.roi.width > self.width or self.roi.y + self.roi.height > self.height:
+                raise ValueError("ROI must fit within the acquired image.")
+        return self
 
 
 

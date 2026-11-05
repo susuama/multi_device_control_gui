@@ -24,6 +24,7 @@ from pydantic import ValidationError
 
 # デバイスの情報や設定の型定義
 from backend.app.models.devices import DeviceInfo
+from backend.app.services.measurement_manager import RecordingSettingsConflictError
 
 router = APIRouter(
     prefix="/api/devices",
@@ -164,7 +165,8 @@ def get_device_settings(device_id: str, request: Request) -> dict[str, Any]:
 
     try:
         # デバイス固有の設定モデルを、APIの共通形式である辞書へ変換する。
-        settings = device_manager.get_settings(device_id)
+        measurement_manager = request.app.state.measurement_manager
+        settings = measurement_manager.get_settings(device_id)
         return settings.model_dump(mode="json")
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -176,6 +178,7 @@ def get_device_settings(device_id: str, request: Request) -> dict[str, Any]:
     summary="機器設定の更新",
     responses={
         404: {"description": "指定されたデバイスが存在しない。"},
+        409: {"description": "記録対象カメラのFPS・ROIは変更できない。"},
         503: {"description": "機器設定の更新に失敗した。"},
     },
 )
@@ -189,7 +192,7 @@ def update_device_settings(
         settings (dict[str, Any]): デバイス固有の設定一式。
         request (Request): FastAPIリクエスト。
     Raises:
-        HTTPException: デバイス不明は404、設定の検証エラーは422、更新失敗は503を返す。
+        HTTPException: デバイス不明は404、記録中の禁止変更は409、検証エラーは422、更新失敗は503。
     """
     device_manager = request.app.state.device_manager
     try:
@@ -198,9 +201,11 @@ def update_device_settings(
         raise HTTPException(status_code=404, detail="Device not found") from exc
 
     try:
-        # 辞書を対象デバイスへ渡し、デバイス自身の設定モデルで検証・適用する。
-        applied_settings = device_manager.set_settings(device_id, settings)
+        measurement_manager = request.app.state.measurement_manager
+        applied_settings = measurement_manager.set_settings(device_id, settings)
         return applied_settings.model_dump(mode="json")
+    except RecordingSettingsConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValidationError as exc:
         # 項目の位置にbodyを付け、JSON化できる検証エラーの一覧を返す。
         errors = exc.errors(include_url=False, include_context=False)

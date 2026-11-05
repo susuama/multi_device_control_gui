@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useSyncExternalStore } from "react";
+import { preferencesStore } from "./state/preferencesStore";
 import { Workspace } from "./workspace/Workspace";
 import type { ViewDefinition } from "./workspace/Workspace";
 import { LogView } from "./views/LogView";
@@ -12,13 +13,13 @@ const views: ViewDefinition[] = [
 ];
 
 function App() {
-    const [theme, setTheme] = useState("dark");
+    const { theme } = useSyncExternalStore(preferencesStore.subscribe, preferencesStore.getSnapshot);
     return (
         <div className={`application theme-${theme}`}>
             <Workspace views={views} actions={
                 <label className="theme-control">
                     配色
-                    <select aria-label="配色" value={theme} onChange={(event) => setTheme(event.target.value)}>
+                    <select aria-label="配色" value={theme} onChange={(event) => preferencesStore.update({ theme: event.target.value as "dark" | "light" })}>
                         <option value="dark">ダーク</option><option value="light">ライト</option>
                     </select>
                 </label>

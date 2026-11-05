@@ -23,3 +23,27 @@ export interface PowerMeterSetting {
     bandwidth: string;       // 帯域幅 (low or high)
     averaging: number;       // (内部)平均化の点数
 }
+
+export interface CameraROI {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+export interface CameraSetting {
+    width: number;
+    height: number;
+    fps: number;
+    exposure: number; // 秒。
+    gain: number;
+    gain_boost: boolean;
+    pixel_format: "mono8" | "rgb24" | "bgr24";
+    roi: CameraROI | null;
+}
+
+export type DeviceSettings = PowerMeterSetting | CameraSetting;
+
+export interface SamplingStatus {
+    is_sampling: boolean;
+}

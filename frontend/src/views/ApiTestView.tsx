@@ -1,19 +1,22 @@
 import { useState } from "react";
 import { apiRawRequest } from "../api/client";
 import { logger } from "../logging/logStore";
+import { backendStore } from "../state/backendStore";
 import { WebSocketPanel } from "./WebSocketPanel";
+import { SharedStatePanel } from "./SharedStatePanel";
 import "../App.css";
 
 const apiGroups = {
     status: "状態",
     devices: "デバイス",
+    recordings: "記録",
     windows: "ウィンドウ",
 };
 
 type Endpoint = {
     id: string;
     tag: keyof typeof apiGroups;
-    method: "GET" | "POST";
+    method: "GET" | "POST" | "PUT";
     path: string;
     title: string;
     description: string;
@@ -31,6 +34,11 @@ const endpoints: Endpoint[] = [
     { id: "start-sampling", tag: "devices", method: "POST", path: "/api/devices/{device_id}/sampling/start", title: "サンプリング開始", description: "指定したIDのデバイスのデータ取得を開始します。", deviceId: true },
     { id: "stop-sampling", tag: "devices", method: "POST", path: "/api/devices/{device_id}/sampling/stop", title: "サンプリング停止", description: "指定したIDのデバイスのデータ取得を停止します。", deviceId: true },
     { id: "sampling-status", tag: "devices", method: "GET", path: "/api/devices/{device_id}/sampling", title: "サンプリング状態取得", description: "指定したIDのデバイスがデータ取得中か確認します。", deviceId: true },
+    { id: "get-settings", tag: "devices", method: "GET", path: "/api/devices/{device_id}/settings", title: "設定取得", description: "適用済みの機器設定を取得します。", deviceId: true },
+    { id: "put-settings", tag: "devices", method: "PUT", path: "/api/devices/{device_id}/settings", title: "設定適用", description: "設定取得の結果を編集し、設定一式を送信します。", deviceId: true, initialBody: "{}" },
+    { id: "recording-status", tag: "recordings", method: "GET", path: "/api/recordings/status", title: "記録状態取得", description: "記録中・終了処理中・保存先・エラーを取得します。" },
+    { id: "start-recording", tag: "recordings", method: "POST", path: "/api/recordings/start", title: "記録開始", description: "開始時に取得中の全機器を記録します。カメラはIDごとのvideo_optionsも指定してください。", initialBody: JSON.stringify({ directory: "recordings", name: null, video_options: {} }, null, 2) },
+    { id: "stop-recording", tag: "recordings", method: "POST", path: "/api/recordings/stop", title: "記録停止", description: "動画・CSV・メタデータの保存完了を待ちます。取得は継続します。" },
     { id: "windows", tag: "windows", method: "GET", path: "/api/windows", title: "ウィンドウ一覧", description: "現在表示されているウィンドウの情報を取得します。" },
     {
         id: "create-window", tag: "windows", method: "POST", path: "/api/windows", title: "ウィンドウ作成",
@@ -84,6 +92,13 @@ function ApiPanel({ endpoint, panelId }: { endpoint: Endpoint; panelId: string }
             });
             const responseBody = await result.text();
             setResponse({ status: result.status, statusText: result.statusText, body: responseBody });
+            if (endpoint.tag === "devices" || endpoint.tag === "recordings") {
+                try {
+                    await backendStore.refresh(endpoint.deviceId ? deviceId : undefined);
+                } catch (cause) {
+                    setError(`HTTP応答は取得しましたが、共有状態の再取得に失敗しました。\n${cause instanceof Error ? cause.message : String(cause)}`);
+                }
+            }
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : String(cause);
             setError(`通信に失敗しました。バックエンドの起動と接続先を確認してください。\n${message}`);
@@ -155,9 +170,8 @@ function ApiPanel({ endpoint, panelId }: { endpoint: Endpoint; panelId: string }
                                 : error ? "送信失敗" : "未送信"}
                         </span>
                     </div>
-                    {error ? (
-                        <pre className="response-body response-error" role="alert">{error}</pre>
-                    ) : response ? (
+                    {error && <pre className="response-body response-error" role="alert">{error}</pre>}
+                    {response ? (
                         <pre className="response-body">{response.body || "（応答本文なし）"}</pre>
                     ) : (
                         <div className="response-body response-empty">
@@ -174,6 +188,7 @@ function ApiPanel({ endpoint, panelId }: { endpoint: Endpoint; panelId: string }
 export function ApiTestView({ panelId }: { panelId: string }) {
     return (
         <div className="api-list">
+            <SharedStatePanel panelId={panelId} />
             {Object.entries(apiGroups).map(([tag, title]) => {
                 const groupEndpoints = endpoints.filter((endpoint) => endpoint.tag === tag);
                 return (

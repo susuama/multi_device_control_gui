@@ -25,6 +25,7 @@ from backend.app.api.events  import router as events_router
 from backend.app.services.device_manager import DeviceManager
 from backend.app.services.measurement_manager import MeasurementManager
 from backend.app.services.event_broadcaster import EventBroadcaster
+from backend.app.services.camera_preview import CameraPreviewService
 
 # 探索対象のデバイスドライバーの一覧
 from backend.app.devices.registry import DEVICE_CLASSES
@@ -38,18 +39,19 @@ async def lifespan(app: FastAPI):
     # ========================== 起動処理 ==========================
     
     # デバイスの探索と管理を行うインスタンスを初期化
-    device_manager      = DeviceManager(device_classes=DEVICE_CLASSES)
-    event_broadcaster   = EventBroadcaster()
-    measurement_manager = MeasurementManager(
+    device_manager         = DeviceManager(device_classes=DEVICE_CLASSES)
+    event_broadcaster      = EventBroadcaster()
+    event_broadcaster.start(asyncio.get_running_loop())
+    camera_preview_service = CameraPreviewService(event_broadcaster)
+    measurement_manager    = MeasurementManager(
         device_manager=device_manager, 
-        event_broadcaster=event_broadcaster
+        event_broadcaster=event_broadcaster,
+        camera_preview_service=camera_preview_service,
         )
     app.state.device_manager      = device_manager
     app.state.measurement_manager = measurement_manager
     app.state.event_broadcaster   = event_broadcaster
-
-    # FastAPIのイベントループをEventBroadcasterに登録する。
-    event_broadcaster.start(asyncio.get_running_loop())
+    app.state.camera_preview_service = camera_preview_service
 
     try:
         yield
@@ -60,13 +62,39 @@ async def lifespan(app: FastAPI):
         # 1. 全デバイスのsamplingを停止
         # 2. Queueに残っているデータを処理
         # 3. Processor Threadを停止
-        measurement_manager.shutdown()
+        errors = []
+        try:
+            measurement_manager.shutdown()
+        except Exception as exc:
+            errors.append(("measurement", exc))
 
-        # 4. 全デバイスとの接続を切断
-        device_manager.shutdown()
+        # 測定側に未完了があっても、独立したサービスの終了をそれぞれ試みる。
+        try:
+            camera_preview_service.shutdown()
+        except Exception as exc:
+            errors.append(("camera preview", exc))
 
-        # 5. EventBroadcasterの配信受付を終了
-        event_broadcaster.shutdown()
+        for device_id, device in device_manager.get_all().items():
+            try:
+                if device.is_sampling():
+                    raise RuntimeError(f"Device is still sampling: {device_id}")
+                if not device_manager.disconnect(device_id):
+                    raise RuntimeError(f"Could not disconnect device: {device_id}")
+            except Exception as exc:
+                errors.append((f"device {device_id}", exc))
+
+        try:
+            event_broadcaster.shutdown()
+        except Exception as exc:
+            errors.append(("event broadcaster", exc))
+
+        for stage, error in errors:
+            error.add_note(f"Application shutdown stage: {stage}")
+        if len(errors) == 1:
+            raise errors[0][1]
+        if errors:
+            message = "; ".join(f"{stage}: {error}" for stage, error in errors)
+            raise ExceptionGroup(f"Application shutdown failed: {message}", [error for _, error in errors])
 
 
 def create_app() -> FastAPI:

@@ -80,7 +80,7 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(self.mm._start_counter_ns, metadata.measurement_start_counter_ns)
         initial = metadata.devices[device_id][0]
         self.assertEqual(device_id, initial["info"]["id"])
-        settings = self.dm.get_settings(device_id)
+        settings = self.mm.get_settings(device_id)
         original_wavelength = settings.wavelength
         self.assertEqual(original_wavelength, initial["settings"]["wavelength"])
 
@@ -109,14 +109,14 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual([[1, 2], [1, 2, 3]], [entry["settings"]["channels"] for entry in history])
         self.assertTrue(all(entry["info"]["details"]["model"] == "test" for entry in history))
 
-    def test_new_sampling_device_and_settings_changes_append_to_their_own_history(self):
+    def test_later_sampling_device_is_excluded_but_target_settings_are_recorded(self):
         first_id = self.connect_and_sample()
         self.mm.data_queue.join()
         self.mm.start_recording(str(self.directory), "device_history")
         initial = self.mm.get_metadata().devices[first_id][0]
-        settings = self.dm.get_settings(first_id).model_copy(update={"wavelength": 650.0})
-        self.dm.set_settings(first_id, settings)
-        self.dm.set_settings(first_id, settings.model_copy(update={"wavelength": 700.0}))
+        settings = self.mm.get_settings(first_id).model_copy(update={"wavelength": 650.0})
+        self.mm.set_settings(first_id, settings)
+        self.mm.set_settings(first_id, settings.model_copy(update={"wavelength": 700.0}))
 
         second_id = next(device_id for device_id in self.dm.get_all() if device_id != first_id)
         self.dm.connect(second_id)
@@ -124,13 +124,23 @@ class MetadataTests(unittest.TestCase):
         self.mm.data_queue.join()
 
         metadata = self.mm.get_metadata()
-        self.assertEqual({first_id, second_id}, set(metadata.devices))
+        self.assertEqual({first_id}, set(metadata.devices))
         self.assertEqual(initial, metadata.devices[first_id][0])
         self.assertEqual([550.0, 650.0, 700.0], [entry["settings"]["wavelength"] for entry in metadata.devices[first_id]])
-        self.assertEqual(1, len(metadata.devices[second_id]))
+        self.assertIn(second_id, self.mm.latest_settings)
+        self.assertFalse((self.directory / "device_history" / f"{second_id}.csv").exists())
         latest = self.mm.latest_settings[first_id]
         self.assertEqual(latest.timestamp_ns, metadata.devices[first_id][-1]["timestamp_ns"])
         self.assertEqual(metadata.devices, self.read_metadata("device_history")["devices"])
+        self.assertTrue(self.mm.is_recording())
+        self.mm.stop_recording()
+        original_metadata = (self.directory / "device_history" / "metadata.json").read_bytes()
+
+        # 次の記録では、その開始時点で取得中の2台を対象にする。
+        self.mm.start_recording(str(self.directory), "next")
+        self.assertEqual({first_id, second_id}, set(self.read_metadata("next")["devices"]))
+        self.assertTrue((self.directory / "next" / f"{second_id}.csv").exists())
+        self.assertEqual(original_metadata, (self.directory / "device_history" / "metadata.json").read_bytes())
 
     def test_queued_settings_preserve_notification_values_and_timestamps(self):
         device_id = self.connect_and_sample()
@@ -202,13 +212,13 @@ class MetadataTests(unittest.TestCase):
 
     def test_recordings_use_latest_settings_and_keep_histories_separate(self):
         device_id = self.connect_and_sample()
-        settings = self.dm.get_settings(device_id)
-        self.dm.set_settings(device_id, settings.model_copy(update={"wavelength": 600.0}))
+        settings = self.mm.get_settings(device_id)
+        self.mm.set_settings(device_id, settings.model_copy(update={"wavelength": 600.0}))
         self.mm.data_queue.join()
         self.assertEqual({}, self.mm.get_metadata().devices)
 
         self.mm.start_recording(str(self.directory), "first")
-        self.dm.set_settings(device_id, settings.model_copy(update={"wavelength": 650.0}))
+        self.mm.set_settings(device_id, settings.model_copy(update={"wavelength": 650.0}))
         self.mm.stop_recording()
         first_path = self.directory / "first" / "metadata.json"
         first_contents = first_path.read_bytes()
@@ -216,7 +226,7 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual([600.0, 650.0], [entry["settings"]["wavelength"] for entry in first_history])
 
         # 記録外の変更と停止済みデバイスの通知を受信し、次の記録を開始する。
-        self.dm.set_settings(device_id, settings.model_copy(update={"wavelength": 700.0}))
+        self.mm.set_settings(device_id, settings.model_copy(update={"wavelength": 700.0}))
         other_id = next(value for value in self.dm.get_all() if value != device_id)
         self.dm.connect(other_id)
         self.mm.start_sampling(other_id)
@@ -260,27 +270,78 @@ class MetadataTests(unittest.TestCase):
             self.workers.append(worker)
             worker.start()
             self.assertTrue(entered.wait(1))
-            # 開始命令の処理を待たせた状態で、後続の設定変更通知をQueueへ追加する。
-            settings = self.dm.get_settings(device_id).model_copy(update={"wavelength": 650.0})
-            self.dm.set_settings(device_id, settings)
+            # ドライバーからの後続通知を直接発生させ、開始命令とのQueue順序を確認する。
+            settings = self.mm.get_settings(device_id).model_copy(update={"wavelength": 650.0})
+            self.dm.get(device_id).set_settings(settings)
+            other_id = next(value for value in self.dm.get_all() if value != device_id)
+            self.dm.connect(other_id)
+            self.mm.start_sampling(other_id)
             release.set()
             self.assertTrue(completed.wait(2))
         self.assertEqual([], errors)
         self.mm.data_queue.join()
         history = self.read_metadata("ordered_start")["devices"][device_id]
         self.assertEqual([550.0, 650.0], [entry["settings"]["wavelength"] for entry in history])
+        self.assertEqual({device_id}, set(self.read_metadata("ordered_start")["devices"]))
+        self.assertFalse((self.directory / "ordered_start" / f"{other_id}.csv").exists())
+
+    def test_csv_initialization_failure_preserves_previous_recording_and_can_retry(self):
+        device_id = self.connect_and_sample()
+        self.mm.start_recording(str(self.directory), "previous")
+        self.mm.stop_recording()
+        previous = self.mm.get_metadata()
+        previous_path = self.directory / "previous" / "metadata.json"
+        previous_contents = previous_path.read_bytes()
+        opened = []
+
+        def fail_writer(file, **kwargs):
+            opened.append(file)
+            raise OSError("CSV initialization failed")
+
+        with patch("backend.app.services.data_racorder.csv.DictWriter", side_effect=fail_writer):
+            with self.assertRaisesRegex(OSError, "CSV initialization failed"):
+                self.mm.start_recording(str(self.directory), "failed_csv")
+        self.assertFalse(self.mm.is_recording())
+        self.assertEqual("CSV initialization failed", self.mm.get_recording_status().error)
+        self.assertEqual(1, len(opened))
+        self.assertTrue(all(file.closed for file in opened))
+        self.assertEqual({}, self.mm._data_recorder._csv_writers)
+        self.assertEqual(previous, self.mm.get_metadata())
+        self.assertEqual(previous_contents, previous_path.read_bytes())
+        self.assertTrue(self.mm.is_sampling(device_id))
+        self.assertTrue(self.mm._processor_thread.is_alive())
+
+        self.mm.start_recording(str(self.directory), "retry_csv")
+        self.assertTrue(self.mm.is_recording())
+        self.assertIsNone(self.mm.get_recording_status().error)
+        self.assertEqual({device_id}, set(self.read_metadata("retry_csv")["devices"]))
 
     def test_initial_metadata_save_failure_stops_recording_and_reports_error(self):
         device_id = self.connect_and_sample()
-        with patch.object(self.mm._data_recorder, "write_metadata", side_effect=OSError("metadata disk full")):
+        opened = []
+
+        def fail_metadata(metadata):
+            opened.extend(self.mm._data_recorder._files.values())
+            raise OSError("metadata disk full")
+
+        with patch.object(self.mm._data_recorder, "write_metadata", side_effect=fail_metadata):
             with self.assertRaisesRegex(OSError, "metadata disk full"):
                 self.mm.start_recording(str(self.directory), "failed_start")
         self.assertFalse(self.mm.is_recording())
         self.assertEqual("metadata disk full", self.mm.get_recording_status().error)
         self.assertIsNotNone(self.mm.get_metadata().recording_stopped_at)
+        self.assertTrue(opened)
+        self.assertTrue(all(file.closed for file in opened))
+        self.assertEqual({}, self.mm._data_recorder._csv_writers)
         self.assertTrue(self.mm.is_sampling(device_id))
         self.assertTrue(self.mm._processor_thread.is_alive())
 
+        self.assertTrue(self.mm._data_recorder.has_pending_cleanup())
+        with self.assertRaisesRegex(RuntimeError, "cleanup has not finished"):
+            self.mm.start_recording(str(self.directory), "recovered")
+        self.mm.stop_recording()
+        self.assertFalse(self.mm._data_recorder.has_pending_cleanup())
+        self.assertIsNotNone(self.read_metadata("failed_start")["recording_stopped_at"])
         self.mm.start_recording(str(self.directory), "recovered")
         self.assertIsNone(self.mm.get_recording_status().error)
         self.assertIsNone(self.read_metadata("recovered")["recording_stopped_at"])
@@ -290,11 +351,13 @@ class MetadataTests(unittest.TestCase):
         self.mm.start_recording(str(self.directory), "replace_failure")
         folder = self.directory / "replace_failure"
         original_contents = (folder / "metadata.json").read_bytes()
-        settings = self.dm.get_settings(device_id).model_copy(update={"wavelength": 650.0})
+        settings = self.mm.get_settings(device_id).model_copy(update={"wavelength": 650.0})
 
         with patch.object(Path, "replace", side_effect=OSError("metadata replace failed")):
-            self.dm.set_settings(device_id, settings)
+            self.mm.set_settings(device_id, settings)
             self.mm.data_queue.join()
+            with self.assertRaisesRegex(OSError, "metadata replace failed"):
+                self.mm._data_recorder.wait_stopped()
 
         self.assertFalse(self.mm.is_recording())
         self.assertEqual("metadata replace failed", self.mm.get_recording_status().error)

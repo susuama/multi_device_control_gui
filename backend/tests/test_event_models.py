@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import ValidationError
 
-from backend.app.models.events import MeasurementEvent
+from backend.app.models.events import CameraPreviewEvent, MeasurementEvent
 
 
 class MeasurementEventTests(unittest.TestCase):
@@ -47,6 +47,50 @@ class MeasurementEventTests(unittest.TestCase):
 
         self.assertEqual([1, 2], payload["data"]["channels"])
         self.assertTrue(payload["data"]["status"]["valid"])
+
+
+class CameraPreviewEventTests(unittest.TestCase):
+    def make_event(self, **changes):
+        values = {
+            "id": "カメラA", "frame_index": 7, "timestamp_ns": 10**18 + 123,
+            "width": 2, "height": 2, "jpeg": b"\xff\xd8\xff\xd9",
+        }
+        values.update(changes)
+        return CameraPreviewEvent(**values)
+
+    def test_binary_message_contains_byte_length_metadata_and_original_jpeg(self):
+        event = self.make_event()
+
+        message = event.to_bytes()
+
+        header_length = int.from_bytes(message[:4], "big")
+        header = message[4:4 + header_length]
+        self.assertEqual(len(message) - 4 - len(event.jpeg), header_length)
+        self.assertGreater(len(header), len(header.decode("utf-8")))
+        self.assertEqual({
+            "type": "camera_preview", "id": event.id, "frame_index": 7,
+            "timestamp_ns": str(event.timestamp_ns), "width": 2, "height": 2,
+        }, json.loads(header))
+        self.assertEqual(event.jpeg, message[4 + header_length:])
+
+    def test_python_dictionary_keeps_jpeg_bytes_and_integer_timestamp_for_publishing(self):
+        event = self.make_event()
+        payload = event.model_dump()
+
+        self.assertIs(event.jpeg, payload["jpeg"])
+        self.assertEqual(event.timestamp_ns, payload["timestamp_ns"])
+        self.assertEqual(event, CameraPreviewEvent.model_validate(payload))
+
+    def test_invalid_metadata_and_missing_jpeg_are_rejected(self):
+        for changes in (
+            {"id": ""}, {"frame_index": -1}, {"timestamp_ns": -1},
+            {"width": 0}, {"height": 0}, {"jpeg": b""}, {"jpeg": "not-bytes"},
+            {"type": "measurement"}, {"extra": 1},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValidationError):
+                self.make_event(**changes)
+        with self.assertRaises(ValidationError):
+            CameraPreviewEvent.model_validate({"id": "camera"})
 
 
 if __name__ == "__main__":

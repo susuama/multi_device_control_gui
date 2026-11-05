@@ -1,19 +1,31 @@
-// イベント通知の型
-//
-// WabSocket通信で送受信するイベント通知の型を定義
-// backend側のapp/models/event.pyと対応する
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
-export interface EventBase {
-  type: string;         // イベントの種類
-  source: string;       // イベントの発生源（デバイスIDやシステムなど）
-  sequence: number;     // イベントのシーケンス番号
-  time: string;         // イベントの発生時刻
+/** backend/app/models/events.py の数値イベントに対応する。 */
+export interface MeasurementEvent {
+    type: "measurement";
+    server_instance_id: string;
+    measurement_id: string;
+    id: string;
+    timestamp_ns: number; // JSON数値。表示の時間軸にはelapsed_sを使う。
+    elapsed_s: number;
+    datetime: string;
+    data: Record<string, JsonValue>;
 }
 
-// -----------イベントの種類ごとの型仕様 ------------
-
-
-export interface PowerSample {
-    power: number;        // 光パワー (W)
+export interface CameraPreviewMetadata {
+    type: "camera_preview";
+    server_instance_id: string;
+    measurement_id: string;
+    id: string;
+    frame_index: number;
+    timestamp_ns: string; // 桁落ちを避けるためバックエンドが10進文字列で送る。
+    width: number;
+    height: number;
 }
+
+export interface CameraPreviewEvent extends CameraPreviewMetadata {
+    jpeg: Blob;
+}
+
+export type ReceivedEvent = MeasurementEvent | CameraPreviewEvent;
 

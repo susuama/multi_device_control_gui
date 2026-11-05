@@ -8,8 +8,6 @@ GET     /api/recordings/status      // 保存状態・保存先・エラーを�
 """
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
-
 from backend.app.models.recordings import RecordingStatus, StartRecordingRequest
 
 router = APIRouter(
@@ -26,14 +24,13 @@ def start_recording(request: Request, body: StartRecordingRequest) -> RecordingS
 
     Args:
         request (Request): FastAPIリクエスト。
-        directory (str): 保存先のディレクトリパス。
-        name (str): 保存ファイル名。
+        body (StartRecordingRequest): 保存先・記録名と、カメラIDごとの動画保存形式。
     Raises:
         HTTPException: 保存開始に失敗した場合。
     """
     measurement_manager = request.app.state.measurement_manager
     try:
-        measurement_manager.start_recording(body.directory, body.name)
+        measurement_manager.start_recording(body.directory, body.name, video_options=body.video_options)
         return measurement_manager.get_recording_status()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -41,7 +38,9 @@ def start_recording(request: Request, body: StartRecordingRequest) -> RecordingS
 
 @router.post("/stop", response_model=RecordingStatus)
 def stop_recording(request: Request) -> RecordingStatus:
-    """保存を終了する。
+    """停止を要求し、動画・CSV・最終メタデータの保存完了を待つ。
+
+    待機中はstatusのis_stoppingがTrueとなり、新しい記録を開始できない。
 
     Args:
         request (Request): FastAPIリクエスト。

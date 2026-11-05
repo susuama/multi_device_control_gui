@@ -71,9 +71,47 @@ class DeviceDataTests(unittest.TestCase):
         self.assertEqual("sample", sample.type)
         self.assertLessEqual(settings.timestamp_ns, sample.timestamp_ns)
 
+    def test_device_operations_keep_applied_settings_and_wrap_measurements(self):
+        self.device.disconnect()
+        initial = self.device.get_settings().model_copy(update={"wavelength": 600.0})
+        applied = initial.model_copy(update={"wavelength": 650.0})
+        with patch.object(self.device, "_open_device", return_value=initial) as open_device, \
+                patch.object(self.device, "_apply_settings", return_value=applied), \
+                patch.object(self.device, "_read_sample", return_value={"power_w": 1.25}), \
+                patch.object(self.device, "_close_device") as close_device:
+            self.assertTrue(self.device.connect())
+            self.assertEqual(initial, self.device.get_settings())
+            self.assertTrue(self.device.connect())
+            open_device.assert_called_once_with()
+            result = self.device.set_settings(initial.model_dump() | {"wavelength": 649.9})
+            self.assertEqual(applied, result)
+            self.assertEqual(applied, self.device.get_settings())
+            before = get_counter_ns()
+            sample = self.device.read()
+            self.assertEqual(self.device_id, sample.id)
+            self.assertEqual("sample", sample.type)
+            self.assertEqual({"power_w": 1.25}, sample.data)
+            self.assertLessEqual(before, sample.timestamp_ns)
+            self.assertLessEqual(sample.timestamp_ns, get_counter_ns())
+            self.assertTrue(self.device.disconnect())
+            close_device.assert_called_once_with()
+
+    def test_failed_device_apply_preserves_settings_without_success_notification(self):
+        original = self.device.get_settings().model_dump()
+        data_queue = queue.Queue()
+        self.device.start_sampling(data_queue)
+        self.assertEqual("settings", data_queue.get(timeout=1).type)
+        with patch.object(self.device, "_apply_settings", side_effect=OSError("apply failed")):
+            with self.assertRaisesRegex(OSError, "apply failed"):
+                self.device.set_settings(original | {"wavelength": 650.0})
+        self.device.stop_sampling()
+        self.assertEqual(original, self.device.get_settings().model_dump())
+        while not data_queue.empty():
+            self.assertEqual("sample", data_queue.get_nowait().type)
+
     def test_idle_changes_are_sent_at_next_start_and_stop_detaches_queue(self):
         settings = self.device.get_settings().model_copy(update={"wavelength": 600.0})
-        self.dm.set_settings(self.device_id, settings)
+        self.mm.set_settings(self.device_id, settings)
         self.assertIsNone(self.device.data_queue)
         data_queue = queue.Queue()
         self.device.start_sampling(data_queue)
@@ -82,14 +120,14 @@ class DeviceDataTests(unittest.TestCase):
         self.assertIsNone(self.device.data_queue)
         while not data_queue.empty():
             data_queue.get_nowait()
-        self.dm.set_settings(self.device_id, settings.model_copy(update={"wavelength": 650.0}))
+        self.mm.set_settings(self.device_id, settings.model_copy(update={"wavelength": 650.0}))
         self.assertTrue(data_queue.empty())
 
     def test_settings_notification_is_independent_of_later_model_changes(self):
         data_queue = queue.Queue()
         self.device.start_sampling(data_queue)
         settings = self.device.get_settings().model_copy(update={"wavelength": 650.0})
-        self.dm.set_settings(self.device_id, settings)
+        self.mm.set_settings(self.device_id, settings)
         settings.wavelength = 700.0
         self.device.stop_sampling()
         messages = []
@@ -115,7 +153,7 @@ class DeviceDataTests(unittest.TestCase):
 
         def change_settings():
             try:
-                self.dm.set_settings(self.device_id, new_settings)
+                self.mm.set_settings(self.device_id, new_settings)
             except Exception as exc:
                 errors.append(exc)
             finally:
@@ -154,12 +192,12 @@ class DeviceDataTests(unittest.TestCase):
         initial = self.mm.latest_settings[self.device_id]
         self.mm.start_recording(str(self.directory), "run_01")
         settings = self.device.get_settings().model_copy(update={"wavelength": 650.0})
-        self.dm.set_settings(self.device_id, settings)
+        self.mm.set_settings(self.device_id, settings)
         self.wait_until(lambda: self.mm.latest_settings[self.device_id].data["wavelength"] == 650.0)
         notification = self.mm.latest_settings[self.device_id]
         self.assertGreaterEqual(notification.timestamp_ns, initial.timestamp_ns)
         self.assertGreaterEqual(self.mm._get_elapsed(notification.timestamp_ns), 0)
-        self.wait_until(lambda: self.device_id in self.mm._data_recorder._writers)
+        self.wait_until(lambda: bool(self.mm._data_recorder._csv_writers[self.device_id].fieldnames))
         self.mm.stop_sampling(self.device_id)
         self.mm.stop_recording()
 
@@ -170,14 +208,19 @@ class DeviceDataTests(unittest.TestCase):
             self.assertGreater(len(list(reader)), 0)
 
     def test_processor_and_csv_handle_non_power_payload(self):
-        self.mm.start_sampling(self.device_id)
-        self.mm.start_recording(str(self.directory), "generic")
-        self.mm.data_queue.put(DeviceData("temperature_sensor", "sample", get_counter_ns(), {"temperature_c": 23.5}))
-        self.mm.stop_recording()
-        with (self.directory / "generic" / "temperature_sensor.csv").open(encoding="utf-8-sig", newline="") as file:
+        def read_temperature():
+            return DeviceData(self.device_id, "sample", get_counter_ns(), {"temperature_c": 23.5})
+
+        with patch.object(self.device, "read", side_effect=read_temperature):
+            self.mm.start_sampling(self.device_id)
+            self.mm.start_recording(str(self.directory), "generic")
+            self.wait_until(lambda: bool(self.mm._data_recorder._csv_writers[self.device_id].fieldnames))
+            self.mm.stop_sampling(self.device_id)
+            self.mm.stop_recording()
+        with (self.directory / "generic" / f"{self.device_id}.csv").open(encoding="utf-8-sig", newline="") as file:
             rows = list(csv.DictReader(file))
-        self.assertEqual(1, len(rows))
-        self.assertEqual("23.5", rows[0]["temperature_c"])
+        self.assertGreaterEqual(len(rows), 1)
+        self.assertTrue(all(row["temperature_c"] == "23.5" for row in rows))
         self.assertNotIn("power_w", rows[0])
 
 

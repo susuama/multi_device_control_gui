@@ -242,20 +242,6 @@ class DeviceManager:
         device = self.get(device_id)
         return device.get_info()
 
-    def get_settings(self, device_id: str):
-        """
-        指定されたデバイスの設定を取得する。
-        """
-        device = self.get(device_id)
-        return device.get_settings()
-
-    def set_settings(self, device_id: str, settings):
-        """
-        指定されたデバイスの設定を更新する。
-        """
-        device = self.get(device_id)
-        return device.set_settings(settings)
-
     def read(self, device_id: str):
         """
         指定されたデバイスからデータを取得する。

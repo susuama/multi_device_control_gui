@@ -1,41 +1,15 @@
-""" 
-ダミーの実装
+"""実パワーメーター用ドライバーのひな型となるダミーパワーメーター。
 
-必須変数
-- driver_name (str) : デバイスドライバーの識別名。クラス名。
-                      scan()で返すDiscoveredDeviceのdriverに対応する。
-                      DEVICE_CLASSESのキーとしても使用される。
-
-必須メソッド
-- scan(cls)     (@classmethod)
-
-- connect()
-- disconnect()
-- update_address(address)
-
-- get_info()
-- get_settings()
-- set_settings(settings)
-
-- read()
-- start_sampling(queue)
-- stop_sampling()
-
-必須データ型
-- DiscoveredDevice          scan()の返り値の型
-- DeviceInfo                get_info()の返り値の型
-- (device-type)Settings     settingsの型。デバイスタイプごとに定義する。
-
-- DeviceData                read()の返り値と設定通知の共通型。
-                            typeはsample（取得データ）またはsettings（設定通知）。
-
-データの取得時間は get_counter_ns() を用いる
-from backend.app.utils.time_utils import get_counter_ns
+共通処理は接続状態、設定通知、DeviceDataへの格納、取得スレッドを扱う。
+実機へ置き換える際は、初期化の「デバイス固有の初期値」と、末尾の
+「デバイス固有処理」を書き換える。SDKのハンドルも初期化時に追加する。
 """
+
 import math
 import time
 import threading
-from typing import Any
+from queue import Full
+from typing import Any, Callable
 
 # データ型
 from backend.app.models.devices import DeviceInfo, DiscoveredDevice, PowerMeterSettings
@@ -46,47 +20,11 @@ from backend.app.utils.time_utils import get_counter_ns
 from backend.app.utils.logging_utils import setup_logger
 
 
-
-
 class DummyPowerMeter:
     # joinの待機上限。通信処理そのものを中断するタイムアウトではない。
     STOP_TIMEOUT = 2.0
-
-    @classmethod
-    def scan(cls) -> list[DiscoveredDevice]:
-        """
-        デバイスを検索する
-
-        Returns:
-            return (list[DiscoveredDevice]): 検出されたデバイスの情報のリスト。
-        """
-        # ドライバーの識別名（クラス名）
-        driver_name = cls.__name__  
-
-        # デバイススキャンの処理
-        # ...
-
-        # ここでは、ダミーのデバイス情報を返す
-        return [
-            DiscoveredDevice(
-                driver=driver_name,
-                type="power_meter",
-                manufacturer="DummyManufacturer",
-                model="DummyModel",
-                serial_number="DUMMY123456",
-                address="dummy_address_1"
-            ),
-            DiscoveredDevice(
-                driver=driver_name,
-                type="power_meter",
-                manufacturer="DummyManufacturer",
-                model="DummyModel",
-                serial_number="DUMMY123457",
-                address="dummy_address_2"
-            )
-        ]
-    
-    # ..........................................
+    DATA_PUT_TIMEOUT = 0.1
+    SETTINGS_PUT_TIMEOUT = 1.0
 
     def __init__(self, 
                 device_id: str,
@@ -112,10 +50,11 @@ class DummyPowerMeter:
         self._state_lock = threading.RLock()    # 取得開始・停止と接続状態の変更が、別のAPI要求で重ならないようにする。
         self._io_lock = threading.RLock()       # データ取得・設定変更とQueueへの追加を順番に実行する。
         self.data_queue = None                 # サンプリング中に使用する共通Queue。
+        self._on_queue_full: Callable[[str], None] | None = None
 
         self.logger = setup_logger(__class__.__name__)
 
-        # デバイス設定の初期化
+        # デバイス固有の初期値。実機では接続時に読み出した適用値へ更新する。
         self.settings = PowerMeterSettings(
             wavelength=550.0,
             range=1.0,
@@ -124,7 +63,7 @@ class DummyPowerMeter:
             averaging=10
         )
 
-    # ..........................................
+    # ========================== 共通処理 ==========================
 
     def connect(self) -> bool:
         """デバイスに接続する。
@@ -150,16 +89,10 @@ class DummyPowerMeter:
             if self.connected:
                 return True
 
-            # ==========================
-            # 実際の接続処理
-            # 例:
-            # self.device = PM160(self.address)
-            # self.device.open()
-
-
-            # 接続完了
-            self.last_error = None
-            self.connected = True
+            with self._io_lock:
+                self.settings = self._open_device()
+                self.last_error = None
+                self.connected = True
             return True
 
     def disconnect(self) -> bool:
@@ -172,13 +105,10 @@ class DummyPowerMeter:
             try:
                 self.stop_sampling()        # sampling threadを停止する
 
-                # ==========================
-                # 実際のデバイス切断処理
-                # 例:
-                # self.opm.close()
-
-                self.connected = False      # 切断済み
-                self.last_error = None
+                with self._io_lock:
+                    self._close_device()
+                    self.connected = False
+                    self.last_error = None
                 return True
             except Exception as exc:
                 # 切断処理に失敗した場合は、エラー内容を記録する。
@@ -195,39 +125,12 @@ class DummyPowerMeter:
 
     # ..........................................
 
-    def get_info(self) -> DeviceInfo:
-        """機器情報を取得する。
-
-        Returns:
-            return (DeviceInfo): 現在の機器情報。
-        """
-        # ==========================
-        # デバイス情報の取得処理
-        # ...
-
-        # ここでは、ダミーのデバイス情報を返す
-        return DeviceInfo(
-            id=self.device_id,
-            type="power_meter",
-            manufacturer="DummyManufacturer",
-            model="DummyModel",
-            serial_number=self.serial_number,
-            address=self.address,
-            # 停止タイムアウトではconnectedがTrueでも、状態はerrorを優先する。
-            status="error" if self.last_error else "connected" if self.connected else "disconnected"
-        )
-    
     def get_settings(self) -> PowerMeterSettings:
         """現在の設定を取得する。
 
         Returns:
             return (PowerMeterSettings): 現在の設定。
         """
-        # ==========================
-        # デバイス設定の取得処理
-        # ...
-
-        # ここでは、ダミーのデバイス設定を返す
         with self._io_lock:
             return self.settings
 
@@ -247,19 +150,38 @@ class DummyPowerMeter:
         validated = PowerMeterSettings.model_validate(settings)
         with self._io_lock:
             # 適用後の設定を保持し、サンプリング中は設定通知をQueueへ追加する。
-            self.settings = validated
+            self.settings = self._apply_settings(validated)
             self._put_settings()
             return self.settings
 
     def _put_settings(self) -> None:
         """サンプリング中のQueueへ、現在の設定とカウンタ時刻を追加する。"""
         if self.data_queue is not None and not self._stop_event.is_set():
-            self.data_queue.put(DeviceData(
+            self._put_data(DeviceData(
                 id=self.device_id,
                 type="settings",
                 timestamp_ns=get_counter_ns(),
                 data=self.settings.model_dump(mode="json"),
             ))
+
+    def _put_data(self, data: DeviceData) -> None:
+        """期限付きで投入し、満杯の場合は自機の取得を止めて管理側へ通知する。
+
+        Args:
+            data (DeviceData): 設定通知または取得データ。設定通知は1秒、取得データは0.1秒待つ。
+        """
+        timeout = self.SETTINGS_PUT_TIMEOUT if data.type == "settings" else self.DATA_PUT_TIMEOUT
+        try:
+            self.data_queue.put(data, timeout=timeout)
+        except Full as exc:
+            self._stop_event.set()
+            if self._on_queue_full is not None:
+                self._on_queue_full(self.device_id)
+            message = (
+                "Settings were applied, but the acquisition queue is full; settings notification was not queued."
+                if data.type == "settings" else "Acquisition queue is full; sample was not queued."
+            )
+            raise Full(message) from exc
 
     # ..........................................
     
@@ -271,46 +193,52 @@ class DummyPowerMeter:
             if self.connected is False:
                 raise RuntimeError("Device is not connected.")
 
-            self.amplitude = 1.0
-            power_w = self.amplitude * math.sin(time.perf_counter())  # デモ用のサイン波を返す
+            sample = self._read_sample()
             return DeviceData(
                 id=self.device_id,
                 type="sample",
                 timestamp_ns=get_counter_ns(),
-                data={"power_w": power_w},
+                data=sample,
             )
 
     # ..........................................
 
-    def start_sampling(self, queue) -> threading.Thread:
+    def start_sampling(
+        self, queue, *, on_queue_full: Callable[[str], None] | None = None,
+    ) -> threading.Thread:
         """
         別スレッドでデータ取得を開始する。
 
         Args:
             queue: 測定データを格納するキュー。
+            on_queue_full (Callable[[str], None] | None): 満杯時に機器IDを通知する関数。
 
         Returns:
             return (threading.Thread): データ取得スレッド。
         """
         with self._state_lock:
-            # データ取得スレッドがまだ存在 and 動作中
+            # データ取得スレッドがまだ存在 and 動作中の場合は、現在のスレッドを返す。
             if self._sampling_thread is not None and self._sampling_thread.is_alive():
-                # stop_sampling()が失敗し、スレッドが存在している場合のエラー
                 if self._stop_event.is_set() or self.last_error:
+                    # stop_sampling()が失敗し、スレッドが存在している場合のエラー
                     raise RuntimeError("Previous sampling thread has not stopped.")
                 return self._sampling_thread    # スレッドを返す
 
-            # 接続していない or エラーが出ている なら取得開始を拒否する
             if not self.connected or self.last_error:
                 raise RuntimeError("Device is not connected.")
 
             # 共通Queueを保持し、最初の取得データより前に現在の設定を追加する。
             with self._io_lock:
                 self.data_queue = queue
+                self._on_queue_full = on_queue_full
                 self._stop_event.clear()
-                self._put_settings()        # 現在の設定をQueueへ追加する
+                try:
+                    self._put_settings()
+                except Full:
+                    self.data_queue = None
+                    self._on_queue_full = None
+                    raise
 
-            # データ取得スレッドを作成して開始する
             self._sampling_thread = threading.Thread(
                 target=self._sample_data,
                 name=f"sampling-{self.device_id}",
@@ -326,20 +254,18 @@ class DummyPowerMeter:
             self._stop_event.set()
             thread = self._sampling_thread
 
-            # スレッドが存在するか
             if thread is not None:
                 thread.join(timeout=self.STOP_TIMEOUT)
-                # タイムアウトしたか
+                # タイムアウトしても参照を消さず、停止の再試行と重複起動防止に使う。
                 if thread.is_alive():
-                    # タイムアウトしても参照を消さず、停止の再試行と重複起動防止に使う。
                     self.last_error = "Timed out waiting for sampling to stop."
                     raise TimeoutError(self.last_error)
 
                 self._sampling_thread = None
 
-            # 取得スレッドの終了後に共通Queueの参照を初期化
             with self._io_lock:
                 self.data_queue = None
+                self._on_queue_full = None
 
     def is_sampling(self) -> bool:
         """
@@ -366,9 +292,11 @@ class DummyPowerMeter:
                     sample = self.read()
                     if sample is None:
                         raise ValueError("Device returned no sample.")
-                    self.data_queue.put(sample)
+                    self._put_data(sample)
                 self._stop_event.wait(0.1)
                 
+        except Full as exc:
+            self.logger.error("Sampling stopped for %s: %s", self.device_id, exc)
         except Exception as exc:
             # 停止要求によって通信が中断された場合は、通信異常と区別する。
             if not self._stop_event.is_set():
@@ -377,3 +305,60 @@ class DummyPowerMeter:
                 self.logger.exception("Sampling failed for %s", self.device_id)
         finally:
             self._stop_event.set()
+
+    # ========================== デバイス固有処理 ==========================
+    # 実機用のクラスでは、以下をSDKの探索・接続・設定・取得処理へ置き換える。
+
+    @classmethod
+    def scan(cls) -> list[DiscoveredDevice]:
+        """SDKの探索結果に相当する、固定のダミーパワーメーター2台を返す。"""
+        return [
+            DiscoveredDevice(
+                driver=cls.__name__, type="power_meter", manufacturer="DummyManufacturer",
+                model="DummyModel", serial_number="DUMMY123456", address="dummy_address_1",
+            ),
+            DiscoveredDevice(
+                driver=cls.__name__, type="power_meter", manufacturer="DummyManufacturer",
+                model="DummyModel", serial_number="DUMMY123457", address="dummy_address_2",
+            ),
+        ]
+
+    def get_info(self) -> DeviceInfo:
+        """機器の識別情報と、取得エラーを優先した接続状態を返す。"""
+        return DeviceInfo(
+            id=self.device_id, type="power_meter", manufacturer="DummyManufacturer",
+            model="DummyModel", serial_number=self.serial_number, address=self.address,
+            status="error" if self.last_error else "connected" if self.connected else "disconnected",
+        )
+
+    def _open_device(self) -> PowerMeterSettings:
+        """SDKで接続し、実際の測定設定を返す箇所。ダミーでは保持中の設定を返す。"""
+        return self.settings
+
+    def _close_device(self) -> None:
+        """SDKのハンドル解放を行う箇所。ダミーでは解放する資源はない。
+
+        未接続・切断済みでも呼ばれるため、実機では存在するハンドルだけを解放する。
+        """
+
+    def _apply_settings(self, settings: PowerMeterSettings) -> PowerMeterSettings:
+        """SDKで設定を適用し、読み戻した適用値を返す箇所。
+
+        Args:
+            settings (PowerMeterSettings): 検証済みの設定一式。ダミーではそのまま返す。
+
+        Returns:
+            PowerMeterSettings: 機器へ適用された設定。要求値が丸められる場合は実際の値。
+        """
+        return settings
+
+    def _read_sample(self) -> dict[str, object]:
+        """SDKで測定値を取得する箇所。ダミーでは振幅1 Wのサイン波を返す。
+
+        実機では取得待機にタイムアウトを設定し、停止要求後も戻れるようにする。
+
+        Returns:
+            dict[str, object]: 測定項目名と値。power_wはワット単位のパワー。
+        """
+        self.amplitude = 1.0
+        return {"power_w": self.amplitude * math.sin(time.perf_counter())}

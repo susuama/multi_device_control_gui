@@ -40,11 +40,12 @@ class DeviceDisconnectTests(unittest.TestCase):
     def assert_workers_stopped(self):
         # TestClientの終了後に、実際の取得・処理スレッドが残っていないことを確認する。
         for thread in threading.enumerate():
-            if thread.name.startswith("sampling-") or thread.name == "measurement-processor":
+            if thread.name.startswith("sampling-") or thread.name in {"measurement-processor", "measurement-queue-monitor"}:
                 thread.join(1)
                 self.assertFalse(thread.is_alive(), thread.name)
         if hasattr(self, "mm"):
             self.assertIsNone(self.mm._processor_thread)
+            self.assertIsNone(self.mm._queue_monitor_thread)
 
     def wait_until(self, condition):
         # 固定時間の待機に頼らず、別スレッドの状態更新を期限付きで待つ。
@@ -277,7 +278,7 @@ class DeviceDisconnectTests(unittest.TestCase):
     def test_device_settings_api_returns_and_updates_settings(self):
         # 現在の設定を取得し、設定一式の更新結果をAPIとデバイスの両方から確認する。
         path = f"/api/devices/{self.ids[0]}/settings"
-        original = self.dm.get_settings(self.ids[0]).model_dump(mode="json")
+        original = self.mm.get_settings(self.ids[0]).model_dump(mode="json")
         response = self.client.get(path)
         self.assertEqual(200, response.status_code)
         self.assertEqual(original, response.json())
@@ -293,10 +294,10 @@ class DeviceDisconnectTests(unittest.TestCase):
         self.assertEqual(200, response.status_code, response.text)
         self.assertEqual(settings, response.json())
         self.assertEqual(settings, self.client.get(path).json())
-        self.assertEqual(settings, self.dm.get_settings(self.ids[0]).model_dump(mode="json"))
+        self.assertEqual(settings, self.mm.get_settings(self.ids[0]).model_dump(mode="json"))
 
     def test_device_settings_api_returns_404_for_unknown_device(self):
-        settings = self.dm.get_settings(self.ids[0]).model_dump(mode="json")
+        settings = self.mm.get_settings(self.ids[0]).model_dump(mode="json")
         for method, options in (("GET", {}), ("PUT", {"json": settings})):
             with self.subTest(method=method):
                 response = self.client.request(method, "/api/devices/unknown/settings", **options)
@@ -305,7 +306,7 @@ class DeviceDisconnectTests(unittest.TestCase):
 
     def test_invalid_settings_return_422_without_changing_device(self):
         path = f"/api/devices/{self.ids[0]}/settings"
-        original = self.dm.get_settings(self.ids[0]).model_dump(mode="json")
+        original = self.mm.get_settings(self.ids[0]).model_dump(mode="json")
         for settings in (
             {"wavelength": 650.0},
             {**original, "averaging": "invalid"},
@@ -317,11 +318,11 @@ class DeviceDisconnectTests(unittest.TestCase):
                 response = self.client.put(path, json=settings)
                 self.assertEqual(422, response.status_code, response.text)
                 self.assertTrue(all(error["loc"][0] == "body" for error in response.json()["detail"]))
-                self.assertEqual(original, self.dm.get_settings(self.ids[0]).model_dump(mode="json"))
+                self.assertEqual(original, self.mm.get_settings(self.ids[0]).model_dump(mode="json"))
 
     def test_device_settings_api_returns_operation_failures(self):
         path = f"/api/devices/{self.ids[0]}/settings"
-        settings = self.dm.get_settings(self.ids[0]).model_dump(mode="json")
+        settings = self.mm.get_settings(self.ids[0]).model_dump(mode="json")
         with patch.object(self.devices[0], "get_settings", side_effect=OSError("settings read failed")):
             response = self.client.get(path)
             self.assertEqual(503, response.status_code)

@@ -12,6 +12,7 @@
 | Uvicorn / Starlette | BSD-3-Clause | APIサーバー・ASGI |
 | pywebview | BSD-3-Clause | Windowsの画面表示 |
 | Rich / AnyIO | MIT | ログ表示・非同期処理 |
+| Pillow | [MIT-CMU](https://github.com/python-pillow/Pillow/blob/13.0.0/LICENSE) | カメラプレビューのJPEG変換 |
 | HTTPX | BSD-3-Clause | APIテスト |
 | React / React DOM / Recharts | MIT | フロントエンド |
 | Vite / TypeScript | MIT / Apache-2.0 | 開発・ビルド |

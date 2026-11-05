@@ -1,5 +1,7 @@
 import webview
 import uuid
+import os
+from pathlib import Path
 
 class WindowManager:
     def __init__(self, base_url: str) -> None:
@@ -26,10 +28,19 @@ class WindowManager:
         window.id = window_id  # ウィンドウに一意のIDを設定
         self.windows[window_id] = window
 
-    def start(self) -> None:
-        """pywebviewのGUIループを開始する。"""
+    def start(self, *, storage_path: str | Path | None = None) -> None:
+        """アプリ専用の保存領域を使い、pywebviewのGUIループを開始する。
+
+        Args:
+            storage_path (str | Path | None): 検証用プロファイルの保存先。
+                省略時はユーザーのローカルアプリデータ領域を使う。
+        """
+        profile = Path(storage_path) if storage_path is not None else (
+            Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+            / "MarkLab" / "MultiDeviceControlGui" / "WebView2"
+        )
         print("start")
-        webview.start()
+        webview.start(private_mode=False, storage_path=str(profile))
 
     # .......................................................
     # api からウィンドウを操作するためのメソッド
