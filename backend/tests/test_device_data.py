@@ -196,7 +196,7 @@ class DeviceDataTests(unittest.TestCase):
         self.wait_until(lambda: self.mm.latest_settings[self.device_id].data["wavelength"] == 650.0)
         notification = self.mm.latest_settings[self.device_id]
         self.assertGreaterEqual(notification.timestamp_ns, initial.timestamp_ns)
-        self.assertGreaterEqual(self.mm._get_elapsed(notification.timestamp_ns), 0)
+        self.assertGreaterEqual(self.mm._get_elapsed(notification.timestamp_ns, self.mm._measurement_period), 0)
         self.wait_until(lambda: bool(self.mm._data_recorder._csv_writers[self.device_id].fieldnames))
         self.mm.stop_sampling(self.device_id)
         self.mm.stop_recording()

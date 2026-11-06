@@ -465,8 +465,9 @@ class CameraRecordingAPITests(unittest.TestCase):
         self.mm = MeasurementManager(manager, self.events)
         self.addCleanup(self.mm.shutdown)
 
-        def start_sampling(data_queue, *, on_queue_full=None):
+        def start_sampling(data_queue):
             self.camera.is_sampling.return_value = True
+            self.sampling_queue = data_queue
             data_queue.put(DeviceData("camera", "settings", get_counter_ns(), self.settings.model_dump()))
 
         self.camera.start_sampling.side_effect = start_sampling
@@ -492,8 +493,8 @@ class CameraRecordingAPITests(unittest.TestCase):
         self.assertEqual("ffv1", video.options.format)
         frame = synthetic_frame()
         timestamp_ns = get_counter_ns()
-        self.mm.data_queue.put(DeviceData("camera", "frame", timestamp_ns, frame))
-        self.mm.data_queue.put(DeviceData("meter", "sample", timestamp_ns, {"power_w": 1.0}))
+        self.sampling_queue.put(DeviceData("camera", "frame", timestamp_ns, frame))
+        self.sampling_queue.put(DeviceData("meter", "sample", timestamp_ns, {"power_w": 1.0}))
         self.mm.data_queue.join()
         self.assertEqual(1, len(video.frames))
         self.assertIs(frame, video.frames[0][0])
@@ -517,7 +518,7 @@ class CameraRecordingAPITests(unittest.TestCase):
         response = self.start_request()
         self.assertEqual(200, response.status_code, response.text)
         for index in range(3):
-            self.mm.data_queue.put(DeviceData("camera", "frame", get_counter_ns(), synthetic_frame(index)))
+            self.sampling_queue.put(DeviceData("camera", "frame", get_counter_ns(), synthetic_frame(index)))
         response = self.client.post("/api/recordings/stop")
         self.assertEqual(200, response.status_code, response.text)
         path = self.directory / "api" / "camera.mkv"
@@ -535,11 +536,11 @@ class CameraRecordingAPITests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg is required")
     def test_api_saves_bgr_frames_and_preserves_pixel_format_in_metadata(self):
         self.settings = self.settings.model_copy(update={"pixel_format": "bgr24"})
-        self.mm.data_queue.put(DeviceData("camera", "settings", get_counter_ns(), self.settings.model_dump()))
+        self.sampling_queue.put(DeviceData("camera", "settings", get_counter_ns(), self.settings.model_dump()))
         response = self.start_request()
         self.assertEqual(200, response.status_code, response.text)
         image = memoryview(bytes((40, 100, 220)) * (8 * 6)).cast("B", shape=(6, 8, 3))
-        self.mm.data_queue.put(DeviceData("camera", "frame", get_counter_ns(), CameraFrame(image, 0)))
+        self.sampling_queue.put(DeviceData("camera", "frame", get_counter_ns(), CameraFrame(image, 0)))
         response = self.client.post("/api/recordings/stop")
         self.assertEqual(200, response.status_code, response.text)
         path = self.directory / "api" / "camera.mkv"
@@ -573,11 +574,11 @@ class CameraRecordingAPITests(unittest.TestCase):
 
         with patch.object(recorder, "_write_frame", side_effect=delayed_write):
             try:
-                self.mm.data_queue.put(DeviceData("camera", "frame", get_counter_ns(), synthetic_frame()))
+                self.sampling_queue.put(DeviceData("camera", "frame", get_counter_ns(), synthetic_frame()))
                 self.assertTrue(entered.wait(2))
                 for index in (1, 2):
-                    self.mm.data_queue.put(DeviceData("camera", "frame", get_counter_ns(), synthetic_frame(index)))
-                self.mm.data_queue.put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 0.5}))
+                    self.sampling_queue.put(DeviceData("camera", "frame", get_counter_ns(), synthetic_frame(index)))
+                self.sampling_queue.put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 0.5}))
                 self.assertTrue(published.wait(1), "Common processor was blocked by the full video queue.")
                 self.assertIn("queue is full", self.mm.get_recording_status().error)
             finally:
@@ -644,7 +645,7 @@ class CameraRecordingAPITests(unittest.TestCase):
                 self.assertTrue(entered.wait(2))
                 options["camera"] = VideoRecordingOptions(format="mpeg4")
                 self.settings.exposure = 0.1
-                self.mm.data_queue.put(DeviceData("camera", "settings", get_counter_ns(), self.settings.model_dump()))
+                self.sampling_queue.put(DeviceData("camera", "settings", get_counter_ns(), self.settings.model_dump()))
             finally:
                 release.set()
                 worker.join(2)

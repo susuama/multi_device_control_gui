@@ -156,7 +156,7 @@ class MetadataTests(unittest.TestCase):
         device.settings.wavelength = 800.0
         with patch.object(device, "get_settings", side_effect=AssertionError("unexpected settings read")):
             for message in messages:
-                self.mm.data_queue.put(message)
+                self.dm.get(device_id).data_queue.put(message)
             self.mm.data_queue.join()
 
         messages[0].data["wavelength"] = 900.0
@@ -376,6 +376,9 @@ class MetadataTests(unittest.TestCase):
             write.side_effect = fail
             self.wait_until(lambda: self.mm.get_metadata().recording_stopped_at is not None)
             self.mm.data_queue.join()
+        # 終了日時の確定後も最終JSONの書き込みは続くため、保存結果を待ってから読む。
+        with self.assertRaisesRegex(OSError, "disk full"):
+            self.mm._data_recorder.wait_stopped()
         self.assertFalse(self.mm.is_recording())
         self.assertTrue(self.mm.is_sampling(device_id))
         stopped = self.mm.get_metadata()

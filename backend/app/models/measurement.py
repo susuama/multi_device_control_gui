@@ -2,7 +2,29 @@
 測定データや測定全体の情報の型
 """
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
+
+from pydantic import BaseModel
+
+
+@dataclass(frozen=True)
+class MeasurementPeriod:
+    """測定IDと共通の時間基準。同じ基準で取得する機器間で共有する。"""
+
+    measurement_id: str
+    started_at: datetime
+    start_counter_ns: int
+
+
+class MeasurementStatus(BaseModel):
+    """直近の測定期間と、現在取得中の機器を返す。初回取得前の期間はNone。"""
+
+    server_instance_id: str
+    measurement_id: str | None
+    started_at: datetime | None
+    sampling_device_ids: list[str]
+    error: str | None
 
 
 @dataclass

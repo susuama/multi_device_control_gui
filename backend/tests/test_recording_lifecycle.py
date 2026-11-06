@@ -79,6 +79,7 @@ class RecordingLifecycleTests(unittest.TestCase):
         self.enterContext(patch("backend.app.services.data_racorder.VideoRecorder", ControlledVideoRecorder))
         settings = CameraSetting(width=8, height=6, fps=10, exposure=0.05, gain=1)
         self.devices = {}
+        self.sampling_queues = {}
         for device_id, kind in (("camera1", "camera"), ("camera2", "camera"), ("meter", "power_meter")):
             device = Mock()
             device.is_sampling.return_value = False
@@ -88,8 +89,9 @@ class RecordingLifecycleTests(unittest.TestCase):
             )
             payload = settings.model_dump() if kind == "camera" else {"wavelength": 550.0}
 
-            def start_sampling(data_queue, device=device, device_id=device_id, payload=payload, *, on_queue_full=None):
+            def start_sampling(data_queue, device=device, device_id=device_id, payload=payload):
                 device.is_sampling.return_value = True
+                self.sampling_queues[device_id] = data_queue
                 data_queue.put(DeviceData(device_id, "settings", get_counter_ns(), payload))
 
             device.start_sampling.side_effect = start_sampling
@@ -145,7 +147,7 @@ class RecordingLifecycleTests(unittest.TestCase):
 
     def frame(self, device_id="camera1", index=0):
         image = memoryview(bytes(range(48))).cast("B", shape=(6, 8))
-        self.mm.data_queue.put(DeviceData(device_id, "frame", get_counter_ns(), CameraFrame(image, index)))
+        self.sampling_queues[device_id].put(DeviceData(device_id, "frame", get_counter_ns(), CameraFrame(image, index)))
 
     def metadata(self, name="run"):
         return json.loads((self.directory / name / "metadata.json").read_text(encoding="utf-8"))
@@ -155,7 +157,7 @@ class RecordingLifecycleTests(unittest.TestCase):
         videos["camera1"].finish_gate.clear()
         for index in range(3):
             self.frame(index=index)
-        self.mm.data_queue.put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 1.0}))
+        self.sampling_queues["meter"].put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 1.0}))
         responses = []
         worker = threading.Thread(target=lambda: responses.append(self.client.post("/api/recordings/stop")))
         self.workers.append(worker)
@@ -170,7 +172,7 @@ class RecordingLifecycleTests(unittest.TestCase):
 
         published = threading.Event()
         self.events.publish.side_effect = lambda event, *, key: published.set()
-        self.mm.data_queue.put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 2.0}))
+        self.sampling_queues["meter"].put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 2.0}))
         self.frame(index=99)
         self.assertTrue(published.wait(1))
         self.assertTrue(worker.is_alive())
@@ -300,7 +302,7 @@ class RecordingLifecycleTests(unittest.TestCase):
             self.assertTrue(worker.is_alive())
             published = threading.Event()
             self.events.publish.side_effect = lambda event, *, key: published.set()
-            self.mm.data_queue.put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 1.0}))
+            self.sampling_queues["meter"].put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 1.0}))
             self.assertTrue(published.wait(1))
             for video in self.videos:
                 video.finish_gate.set()
@@ -443,7 +445,7 @@ class RecordingLifecycleTests(unittest.TestCase):
         self.mm.stop_all_sampling()
         self.mm.data_queue.join()
         self.mm._stop_processor()
-        self.mm.data_queue.put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 1.0}))
+        self.sampling_queues["meter"].put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 1.0}))
         try:
             with self.assertRaisesRegex(RuntimeError, "1 unprocessed queue items"):
                 self.mm.shutdown()
@@ -491,15 +493,15 @@ class RecordingLifecycleTests(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         real_elapsed = self.mm._get_elapsed
 
-        def elapsed(timestamp):
+        def elapsed(timestamp, period):
             entered.set()
             if not release.wait(3):
                 raise TimeoutError("Test did not release sample processing.")
-            return real_elapsed(timestamp)
+            return real_elapsed(timestamp, period)
 
         try:
             with patch.object(self.mm, "_get_elapsed", side_effect=elapsed):
-                self.mm.data_queue.put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 1.0}))
+                self.sampling_queues["meter"].put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 1.0}))
                 self.assertTrue(entered.wait(1))
                 self.mm.SHUTDOWN_WAIT_TIMEOUT = 0.03
                 with self.assertRaisesRegex(TimeoutError, "recording command"):
@@ -512,7 +514,7 @@ class RecordingLifecycleTests(unittest.TestCase):
         finally:
             release.set()
 
-    def test_shutdown_timeout_applies_while_final_metadata_holds_recorder_lock(self):
+    def test_shutdown_timeout_applies_while_final_metadata_is_writing(self):
         self.start()
         entered, release = threading.Event(), threading.Event()
         replace = Path.replace
@@ -530,7 +532,7 @@ class RecordingLifecycleTests(unittest.TestCase):
                 with self.assertRaisesRegex(TimeoutError, "recording finalization"):
                     self.mm._data_recorder.wait_stopped(timeout=0.02)
                 self.mm.SHUTDOWN_WAIT_TIMEOUT = 0.03
-                with self.assertRaisesRegex(TimeoutError, "recording command"):
+                with self.assertRaisesRegex(TimeoutError, "recording finalization"):
                     self.mm.shutdown()
                 self.assertTrue(self.mm._processor_thread.is_alive())
                 self.assertTrue(self.mm._data_recorder.has_pending_cleanup())
@@ -550,7 +552,7 @@ class RecordingLifecycleTests(unittest.TestCase):
         self.wait_until(lambda: video.error is not None)
         self.assertTrue(self.mm.is_recording())
         self.frame("camera2", 0)
-        self.mm.data_queue.put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 1.0}))
+        self.sampling_queues["meter"].put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 1.0}))
         self.assertEqual(503, self.client.post("/api/recordings/stop").status_code)
         saved = self.metadata()
         self.assertEqual("failed", saved["video_results"]["camera1"]["state"])

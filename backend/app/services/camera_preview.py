@@ -26,6 +26,8 @@ class _PreviewFrame:
     pixel_format: str
     frame_index: int
     timestamp_ns: int
+    server_instance_id: str
+    measurement_id: str
 
 
 @dataclass
@@ -96,6 +98,7 @@ class CameraPreviewService:
 
     def offer_frame(
         self, device_id: str, frame: CameraFrame, timestamp_ns: int, settings: CameraSetting,
+        *, server_instance_id: str, measurement_id: str,
     ) -> bool:
         """画素をコピーし、指定カメラの変換待ち画像を最新の1枚へ置き換える。
 
@@ -104,6 +107,8 @@ class CameraPreviewService:
             frame (CameraFrame): 元画像とカメラ由来のフレーム番号。
             timestamp_ns (int): PC取得時のカウンタ時刻。
             settings (CameraSetting): この画像に対応する取得サイズと画素形式。
+            server_instance_id (str): 取得元のバックエンド起動ID。
+            measurement_id (str): 画像を取得した測定期間のID。JPEG変換後もこの値を使う。
 
         Returns:
             bool: 画像を受け付けた場合はTrue。停止中・終了後・前回取得分ならFalse。
@@ -113,7 +118,6 @@ class CameraPreviewService:
             if state is None or self._closed or timestamp_ns < state.started_at_ns:
                 return False
 
-        # 画像をコピーし、画像の型・形状・メモリ配置を検証する
         image = memoryview(frame.image)
         shape = (settings.height, settings.width)
         if settings.pixel_format != "mono8":
@@ -123,7 +127,6 @@ class CameraPreviewService:
         if not image.c_contiguous:
             raise ValueError("Camera preview image must be C-contiguous.")
 
-        # コピー済みの画素と、フレーム情報をまとめる
         snapshot = _PreviewFrame(
             pixels=image.tobytes(),
             width=settings.width, 
@@ -131,6 +134,8 @@ class CameraPreviewService:
             pixel_format=settings.pixel_format, 
             frame_index=frame.frame_index, 
             timestamp_ns=timestamp_ns,
+            server_instance_id=server_instance_id,
+            measurement_id=measurement_id,
         )
 
         with self._condition:
@@ -177,21 +182,20 @@ class CameraPreviewService:
         while True:
             with self._condition:
                 while not self._closed:
-                    # 変換待ち画像があるカメラを取得する。
                     candidates = [
                         (key, state) 
                         for key, state in self._cameras.items() 
                         if state.pending is not None
                         ]
                     if not candidates:
-                        self._condition.wait()  # self._condition.notify() を待つ
+                        self._condition.wait()
                         continue
 
                     # next_ready_at が最小のカメラを選ぶ。変換時刻になっていなければ待機して続ける。
                     device_id, state = min(candidates, key=lambda item: item[1].next_ready_at)
                     delay = state.next_ready_at - time.monotonic()
                     if delay > 0:
-                        self._condition.wait(timeout=delay) # self._condition.notify() を待つ
+                        self._condition.wait(timeout=delay)
                         continue
 
                     frame = state.pending
@@ -202,12 +206,14 @@ class CameraPreviewService:
 
             try:
                 event = CameraPreviewEvent(
+                    server_instance_id=frame.server_instance_id,
+                    measurement_id=frame.measurement_id,
                     id=device_id, 
                     frame_index=frame.frame_index, 
                     timestamp_ns=frame.timestamp_ns,
                     width=frame.width, 
                     height=frame.height, 
-                    jpeg=self._encode_jpeg(frame),  # JPEG変換
+                    jpeg=self._encode_jpeg(frame),
                 )
                 with self._condition:
                     # 停止・再開始されていないことを確認して配信する

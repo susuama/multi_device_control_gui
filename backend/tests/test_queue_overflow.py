@@ -18,10 +18,10 @@ from backend.app.api.devices import router as devices_router
 from backend.app.api.recordings import router as recordings_router
 from backend.app.devices.camera.dummy_camera import DummyCamera
 from backend.app.devices.power_meter.dummy_power_meter import DummyPowerMeter
-from backend.app.models.measurement import DeviceData
+from backend.app.models.measurement import DeviceData, MeasurementPeriod
 from backend.app.services.device_manager import DeviceManager
-from backend.app.services.measurement_manager import MeasurementManager
-from backend.app.utils.time_utils import get_counter_ns
+from backend.app.services.measurement_manager import MeasurementManager, _SamplingData, _SamplingQueue
+from backend.app.utils.time_utils import get_counter_ns, get_datetime
 
 
 class QueueOverflowTests(unittest.TestCase):
@@ -69,17 +69,18 @@ class QueueOverflowTests(unittest.TestCase):
         for device_id in self.ids:
             self.mm.start_sampling(device_id)
         self.mm.data_queue.join()
+        self.sampling_queue = self.dm.get(self.ids[0]).data_queue
 
     def block_processor(self):
         entered, release = threading.Event(), threading.Event()
         self.releases.append(release)
         real_elapsed = self.mm._get_elapsed
 
-        def elapsed(timestamp):
+        def elapsed(timestamp, period):
             entered.set()
             if not release.wait(5):
                 raise TimeoutError("Test did not release Processor.")
-            return real_elapsed(timestamp)
+            return real_elapsed(timestamp, period)
 
         self.enterContext(patch.object(self.mm, "_get_elapsed", side_effect=elapsed))
         self.mm.data_queue.put(self.sample(0))
@@ -87,7 +88,7 @@ class QueueOverflowTests(unittest.TestCase):
         return release
 
     def sample(self, index):
-        return DeviceData(self.ids[0], "sample", get_counter_ns(), {"power_w": float(index)})
+        return _SamplingData(DeviceData(self.ids[0], "sample", get_counter_ns(), {"power_w": float(index)}), self.sampling_queue)
 
     def fill_queue(self):
         while True:
@@ -122,6 +123,28 @@ class QueueOverflowTests(unittest.TestCase):
         self.mm._request_queue_stop(self.ids[0])
         self.wait_until(lambda: self.mm._queue_stop_attempted)
         self.assertFalse(self.dm.get(self.ids[0]).is_sampling())
+
+    def test_sampling_queue_full_notifies_once_per_device_and_monitor_stops_all(self):
+        # 件数監視の閾値検出を除き、実際のput失敗から監視スレッドを起こす経路を確認する。
+        with patch.object(self.mm, "QUEUE_STOP_THRESHOLD", self.mm.QUEUE_MAXSIZE), \
+                patch.object(self.mm, "_request_queue_stop", wraps=self.mm._request_queue_stop) as notify, \
+                patch.object(self.mm, "stop_all_sampling", wraps=self.mm.stop_all_sampling) as stop:
+            self.start_devices()
+            self.mm.start_recording(str(self.directory), "full-notification")
+            release = self.block_processor()
+            self.fill_queue()
+            self.wait_until(lambda: self.mm._queue_stop_attempted)
+            notified_ids = [call.args[0] for call in notify.call_args_list]
+            self.assertTrue(notified_ids)
+            self.assertEqual(len(notified_ids), len(set(notified_ids)))
+            self.assertTrue(set(notified_ids).issubset(self.ids))
+            stop.assert_called_once()
+            self.assertFalse(any(device.is_sampling() for device in self.dm.get_all().values()))
+            status = self.mm.get_recording_status()
+            self.assertTrue(status.is_recording)
+            self.assertIn("queue is full", status.error)
+            release.set()
+            self.mm.data_queue.join()
 
     def test_300_items_do_not_trigger_stop_but_301_items_do(self):
         self.start_devices()
@@ -325,7 +348,10 @@ class QueueOverflowTests(unittest.TestCase):
 
 
 class DeviceQueueFullTests(unittest.TestCase):
-    def test_initial_settings_full_notifies_and_does_not_start_a_worker(self):
+    def setUp(self):
+        self.period = MeasurementPeriod("test-period", get_datetime(), get_counter_ns())
+
+    def test_initial_settings_full_notifies_once_and_does_not_start_a_worker(self):
         for driver in (DummyCamera, DummyPowerMeter):
             with self.subTest(driver=driver.__name__):
                 device = driver("test")
@@ -334,12 +360,12 @@ class DeviceQueueFullTests(unittest.TestCase):
                 output.put_nowait(object())
                 device.SETTINGS_PUT_TIMEOUT = 0.01
                 notices = []
+                source = _SamplingQueue(output, self.period, on_queue_full=notices.append)
                 with self.assertRaisesRegex(queue.Full, "settings notification was not queued"):
-                    device.start_sampling(output, on_queue_full=notices.append)
+                    device.start_sampling(source)
                 self.assertEqual(["test"], notices)
                 self.assertIsNone(device._sampling_thread)
                 self.assertIsNone(device.data_queue)
-                self.assertIsNone(device._on_queue_full)
                 self.assertTrue(device.connected)
                 device.disconnect()
 
@@ -350,15 +376,15 @@ class DeviceQueueFullTests(unittest.TestCase):
                 device.connect()
                 output = queue.Queue(maxsize=1)
                 notices = []
-                thread = device.start_sampling(output, on_queue_full=notices.append)
+                source = _SamplingQueue(output, self.period, on_queue_full=notices.append)
+                thread = device.start_sampling(source)
                 thread.join(1)
                 self.assertFalse(thread.is_alive())
                 self.assertEqual(["test"], notices)
                 self.assertTrue(device.connected)
                 self.assertIsNone(device.last_error)
-                self.assertEqual("settings", output.get_nowait().type)
+                self.assertEqual("settings", output.get_nowait().data.type)
                 device.stop_sampling()
-                self.assertIsNone(device._on_queue_full)
                 device.disconnect()
 
     def test_applied_settings_are_preserved_when_notification_cannot_be_queued(self):
@@ -367,9 +393,9 @@ class DeviceQueueFullTests(unittest.TestCase):
                 device = driver("test")
                 device.connect()
                 notices = []
-                device.data_queue = queue.Queue(maxsize=1)
-                device.data_queue.put_nowait(object())
-                device._on_queue_full = notices.append
+                output = queue.Queue(maxsize=1)
+                output.put_nowait(object())
+                device.data_queue = _SamplingQueue(output, self.period, on_queue_full=notices.append)
                 device.SETTINGS_PUT_TIMEOUT = 0.01
                 changes = {"gain": 2.0} if driver is DummyCamera else {"wavelength": 650.0}
                 settings = device.get_settings().model_dump() | changes

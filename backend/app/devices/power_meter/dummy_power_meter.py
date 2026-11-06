@@ -9,7 +9,7 @@ import math
 import time
 import threading
 from queue import Full
-from typing import Any, Callable
+from typing import Any
 
 # データ型
 from backend.app.models.devices import DeviceInfo, DiscoveredDevice, PowerMeterSettings
@@ -50,7 +50,6 @@ class DummyPowerMeter:
         self._state_lock = threading.RLock()    # 取得開始・停止と接続状態の変更が、別のAPI要求で重ならないようにする。
         self._io_lock = threading.RLock()       # データ取得・設定変更とQueueへの追加を順番に実行する。
         self.data_queue = None                 # サンプリング中に使用する共通Queue。
-        self._on_queue_full: Callable[[str], None] | None = None
 
         self.logger = setup_logger(__class__.__name__)
 
@@ -165,7 +164,7 @@ class DummyPowerMeter:
             ))
 
     def _put_data(self, data: DeviceData) -> None:
-        """期限付きで投入し、満杯の場合は自機の取得を止めて管理側へ通知する。
+        """期限付きで投入し、満杯の場合は自機の取得を止めて投入失敗を返す。
 
         Args:
             data (DeviceData): 設定通知または取得データ。設定通知は1秒、取得データは0.1秒待つ。
@@ -173,15 +172,9 @@ class DummyPowerMeter:
         timeout = self.SETTINGS_PUT_TIMEOUT if data.type == "settings" else self.DATA_PUT_TIMEOUT
         try:
             self.data_queue.put(data, timeout=timeout)
-        except Full as exc:
+        except Full:
             self._stop_event.set()
-            if self._on_queue_full is not None:
-                self._on_queue_full(self.device_id)
-            message = (
-                "Settings were applied, but the acquisition queue is full; settings notification was not queued."
-                if data.type == "settings" else "Acquisition queue is full; sample was not queued."
-            )
-            raise Full(message) from exc
+            raise
 
     # ..........................................
     
@@ -204,14 +197,13 @@ class DummyPowerMeter:
     # ..........................................
 
     def start_sampling(
-        self, queue, *, on_queue_full: Callable[[str], None] | None = None,
+        self, queue,
     ) -> threading.Thread:
         """
         別スレッドでデータ取得を開始する。
 
         Args:
             queue: 測定データを格納するキュー。
-            on_queue_full (Callable[[str], None] | None): 満杯時に機器IDを通知する関数。
 
         Returns:
             return (threading.Thread): データ取得スレッド。
@@ -230,13 +222,11 @@ class DummyPowerMeter:
             # 共通Queueを保持し、最初の取得データより前に現在の設定を追加する。
             with self._io_lock:
                 self.data_queue = queue
-                self._on_queue_full = on_queue_full
                 self._stop_event.clear()
                 try:
                     self._put_settings()
                 except Full:
                     self.data_queue = None
-                    self._on_queue_full = None
                     raise
 
             self._sampling_thread = threading.Thread(
@@ -265,7 +255,6 @@ class DummyPowerMeter:
 
             with self._io_lock:
                 self.data_queue = None
-                self._on_queue_full = None
 
     def is_sampling(self) -> bool:
         """

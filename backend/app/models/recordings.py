@@ -47,10 +47,29 @@ class StartRecordingRequest(BaseModel):
     name: str | None = None     # 記録フォルダ名
     video_options: dict[str, VideoRecordingOptions] = Field(default_factory=dict)
 
+
+class RecordingTargetStatus(BaseModel):
+    """記録開始時の対象情報と保存状態。保存処理を閉じた後も保持する。"""
+
+    type: str
+    settings_at_start: dict[str, JsonValue]
+    video_options: VideoRecordingOptions | None = None
+    state: Literal["not_started", "recording", "stopping", "completed", "empty", "failed"] = "not_started"
+    error: str | None = None
+    locked_settings: list[str] = Field(default_factory=list)
+
+
 class RecordingStatus(BaseModel):
-    """記録全体の状態。保存先・記録名・エラーは停止後も保持する。"""
+    """記録全体の状態。保存先・記録名・エラーは停止後も保持する。
+
+    最終JSONの未保存だけが残る場合はis_stoppingがFalseでも、次の記録を開始できない。
+    """
+    server_instance_id: str
+    recording_id: str | None = None
+    measurement_id: str | None = None
+    targets: dict[str, RecordingTargetStatus] = Field(default_factory=dict)
     is_recording: bool      # 新しい測定データを保存する状態にあるか。
-    is_stopping: bool = False  # 新規受付を止め、保存の終了処理を行っているか。
+    is_stopping: bool = False  # 終了処理中、または未解放の保存リソースが残るか。
     directory: str | None   # 作成した記録フォルダのパス。未作成ならNone。
     name: str | None        # 記録フォルダ名。未作成ならNone。
     error: str | None       # 記録処理で保持しているエラー理由。エラーがなければNone。

@@ -220,10 +220,10 @@ class DeviceDisconnectTests(unittest.TestCase):
         self.release_events.append(release)
         real_elapsed = self.mm._get_elapsed
 
-        def elapsed(counter):
+        def elapsed(counter, period):
             entered.set()
             release.wait(2)
-            return real_elapsed(counter)
+            return real_elapsed(counter, period)
 
         with patch.object(self.mm, "_get_elapsed", side_effect=elapsed):
             self.mm.start_sampling(self.ids[0])

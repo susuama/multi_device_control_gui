@@ -43,7 +43,7 @@ class CameraPreviewTests(unittest.TestCase):
         return CameraFrame(memoryview(pixel * (shape[0] * shape[1])).cast("B", shape=shape), index)
 
     def offer(self, index=0, device_id="camera"):
-        return self.service.offer_frame(device_id, self.frame(index), get_counter_ns(), self.settings)
+        return self.service.offer_frame(device_id, self.frame(index), get_counter_ns(), self.settings, server_instance_id="preview-server", measurement_id="preview-period")
 
     def wait_until(self, condition):
         deadline = time.monotonic() + 2
@@ -75,7 +75,7 @@ class CameraPreviewTests(unittest.TestCase):
                 settings = self.settings.model_copy(update={"pixel_format": pixel_format})
                 timestamp = get_counter_ns()
                 frame = self.frame(7, pixel, pixel_format)
-                self.assertTrue(self.service.offer_frame("camera", frame, timestamp, settings))
+                self.assertTrue(self.service.offer_frame("camera", frame, timestamp, settings, server_instance_id="preview-server", measurement_id="preview-period"))
                 event, key, _ = self.output.get(timeout=2)
                 self.assertEqual("camera", key)
                 self.assertEqual("camera_preview", event["type"])
@@ -97,7 +97,7 @@ class CameraPreviewTests(unittest.TestCase):
         pixels = bytearray([30] * (16 * 12))
         frame = CameraFrame(memoryview(pixels).cast("B", shape=(12, 16)), 7)
         timestamp = get_counter_ns()
-        self.assertTrue(self.service.offer_frame("camera", frame, timestamp, self.settings))
+        self.assertTrue(self.service.offer_frame("camera", frame, timestamp, self.settings, server_instance_id="preview-server", measurement_id="preview-period"))
         self.assertTrue(entered.wait(1))
 
         pixels[:] = bytes([255] * len(pixels))
@@ -172,7 +172,7 @@ class CameraPreviewTests(unittest.TestCase):
         old_timestamp = get_counter_ns()
         self.service.stop_camera("camera")
         self.service.start_camera("camera")
-        self.assertFalse(self.service.offer_frame("camera", self.frame(1), old_timestamp, self.settings))
+        self.assertFalse(self.service.offer_frame("camera", self.frame(1), old_timestamp, self.settings, server_instance_id="preview-server", measurement_id="preview-period"))
         self.assertTrue(self.offer(2))
         release.set()
 
@@ -182,11 +182,11 @@ class CameraPreviewTests(unittest.TestCase):
     def test_invalid_shape_dtype_and_noncontiguous_image_are_rejected(self):
         for image in (memoryview(b"\x00" * 10), memoryview(array("H", [0] * (16 * 12)))):
             with self.subTest(image=image), self.assertRaisesRegex(ValueError, "uint8"):
-                self.service.offer_frame("camera", CameraFrame(image, 0), get_counter_ns(), self.settings)
+                self.service.offer_frame("camera", CameraFrame(image, 0), get_counter_ns(), self.settings, server_instance_id="preview-server", measurement_id="preview-period")
         image = memoryview(bytes(range(16))).cast("B", shape=(4, 4))[::2]
         settings = CameraSetting(width=4, height=2, fps=10, exposure=0.01, gain=1)
         with self.assertRaisesRegex(ValueError, "C-contiguous"):
-            self.service.offer_frame("camera", CameraFrame(image, 0), get_counter_ns(), settings)
+            self.service.offer_frame("camera", CameraFrame(image, 0), get_counter_ns(), settings, server_instance_id="preview-server", measurement_id="preview-period")
         self.assertTrue(self.output.empty())
 
     def test_conversion_failure_is_reported_and_next_valid_frame_recovers(self):
@@ -242,6 +242,7 @@ class MeasurementPreviewTests(unittest.TestCase):
         logging.disable(logging.CRITICAL)
         self.settings = CameraSetting(width=16, height=12, fps=100, exposure=0.01, gain=1)
         self.devices = {}
+        self.sampling_queues = {}
         for device_id, kind in (("camera", "camera"), ("meter", "power_meter")):
             device = Mock()
             device.is_sampling.return_value = False
@@ -251,8 +252,9 @@ class MeasurementPreviewTests(unittest.TestCase):
             )
             settings = self.settings.model_dump() if kind == "camera" else {"wavelength": 550.0}
 
-            def start(data_queue, device=device, device_id=device_id, settings=settings, *, on_queue_full=None):
+            def start(data_queue, device=device, device_id=device_id, settings=settings):
                 device.is_sampling.return_value = True
+                self.sampling_queues[device_id] = data_queue
                 data_queue.put(DeviceData(device_id, "settings", get_counter_ns(), settings))
 
             device.start_sampling.side_effect = start
@@ -284,7 +286,7 @@ class MeasurementPreviewTests(unittest.TestCase):
     def frame(self, index=0, timestamp_ns=None):
         image = memoryview(b"\x40" * (16 * 12)).cast("B", shape=(12, 16))
         data = DeviceData("camera", "frame", timestamp_ns or get_counter_ns(), CameraFrame(image, index))
-        self.mm.data_queue.put(data)
+        self.sampling_queues[data.id].put(data)
         return data
 
     def block_encoder(self):
@@ -309,7 +311,7 @@ class MeasurementPreviewTests(unittest.TestCase):
             self.assertTrue(entered.wait(1))
             for index in range(1, 6):
                 self.frame(index)
-            self.mm.data_queue.put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 0.5}))
+            self.sampling_queues["meter"].put(DeviceData("meter", "sample", get_counter_ns(), {"power_w": 0.5}))
             self.mm.data_queue.join()
 
             saved = [call.args[0].data.frame_index for call in write.call_args_list if call.args[0].type == "frame"]
@@ -357,7 +359,7 @@ class MeasurementPreviewTests(unittest.TestCase):
                 patch.object(self.mm, "_request_recording_stop") as finish, \
                 patch.object(self.mm.logger, "exception") as log:
             for sample in samples:
-                self.mm.data_queue.put(sample)
+                self.sampling_queues[sample.id].put(sample)
             self.mm.data_queue.join()
 
         self.assertEqual(samples, [call.args[0] for call in write.call_args_list])
@@ -372,7 +374,7 @@ class MeasurementPreviewTests(unittest.TestCase):
         with patch.object(self.mm._data_recorder, "is_recording", return_value=True), \
                 patch.object(self.mm._data_recorder, "write") as write, \
                 patch.object(self.mm.logger, "exception") as log:
-            self.mm.data_queue.put(sample)
+            self.sampling_queues[sample.id].put(sample)
             self.mm.data_queue.join()
 
         write.assert_called_once()
@@ -398,7 +400,7 @@ class MeasurementPreviewTests(unittest.TestCase):
         with patch.object(self.mm._data_recorder, "is_recording", return_value=True), \
                 patch.object(self.mm._data_recorder, "write", side_effect=OSError("write failed")), \
                 patch.object(self.mm, "_request_recording_stop") as finish:
-            self.mm.data_queue.put(sample)
+            self.sampling_queues[sample.id].put(sample)
             self.mm.data_queue.join()
 
         finish.assert_called_once()
@@ -428,7 +430,7 @@ class MeasurementPreviewTests(unittest.TestCase):
             self.mm.start_sampling("camera")
 
         image = memoryview(b"\x40" * (16 * 12)).cast("B", shape=(12, 16))
-        self.assertFalse(self.preview.offer_frame("camera", CameraFrame(image, 0), get_counter_ns(), self.settings))
+        self.assertFalse(self.preview.offer_frame("camera", CameraFrame(image, 0), get_counter_ns(), self.settings, server_instance_id="preview-server", measurement_id="preview-period"))
 
 
 if __name__ == "__main__":

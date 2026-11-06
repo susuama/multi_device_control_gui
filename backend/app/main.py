@@ -10,6 +10,7 @@ URLルーティングは別ファイル（app/api/*.py）にまとめる。
 """
 
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
 from fastapi import FastAPI
 import asyncio
@@ -20,6 +21,7 @@ from backend.app.api.devices import router as device_router
 from backend.app.api.windows import router as window_router
 from backend.app.api.recordings import router as recording_router
 from backend.app.api.events  import router as events_router
+from backend.app.api.measurements import router as measurements_router
 
 # デバイスの管理を行うサービス群
 from backend.app.services.device_manager import DeviceManager
@@ -47,6 +49,7 @@ async def lifespan(app: FastAPI):
         device_manager=device_manager, 
         event_broadcaster=event_broadcaster,
         camera_preview_service=camera_preview_service,
+        server_instance_id=str(uuid4()),
         )
     app.state.device_manager      = device_manager
     app.state.measurement_manager = measurement_manager
@@ -59,11 +62,9 @@ async def lifespan(app: FastAPI):
     finally:
         # ========================== 終了処理 ==========================
 
-        # 1. 全デバイスのsamplingを停止
-        # 2. Queueに残っているデータを処理
-        # 3. Processor Threadを停止
         errors = []
         try:
+            # 取得を止め、受付済みデータと記録の保存終了を確認してからProcessorを終了する。
             measurement_manager.shutdown()
         except Exception as exc:
             errors.append(("measurement", exc))
@@ -115,6 +116,7 @@ def create_app() -> FastAPI:
     app.include_router(device_router)
     app.include_router(recording_router)
     app.include_router(events_router)
+    app.include_router(measurements_router)
 
     return app
 

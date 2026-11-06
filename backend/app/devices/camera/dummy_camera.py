@@ -9,7 +9,7 @@ ROIの切り出しと動画保存は保存側が行うため、このクラス�
 import threading
 import time
 from queue import Full, Queue
-from typing import Any, Callable
+from typing import Any
 
 from backend.app.models.devices import CameraSetting, DeviceInfo, DiscoveredDevice
 from backend.app.models.measurement import CameraFrame, DeviceData
@@ -42,7 +42,6 @@ class DummyCamera:
         self._stop_event = threading.Event()
         self._sampling_thread: threading.Thread | None = None
         self.data_queue: Queue | None = None
-        self._on_queue_full: Callable[[str], None] | None = None
         self.logger = setup_logger(type(self).__name__)
 
         # デバイス固有の初期値。実機では接続時に読み出した適用値へ更新する。
@@ -121,7 +120,7 @@ class DummyCamera:
             ))
 
     def _put_data(self, data: DeviceData) -> None:
-        """期限付きで投入し、満杯の場合は自機の取得を止めて管理側へ通知する。
+        """期限付きで投入し、満杯の場合は自機の取得を止めて投入失敗を返す。
 
         Args:
             data (DeviceData): 設定通知または取得データ。設定通知は1秒、取得データは0.1秒待つ。
@@ -129,15 +128,9 @@ class DummyCamera:
         timeout = self.SETTINGS_PUT_TIMEOUT if data.type == "settings" else self.DATA_PUT_TIMEOUT
         try:
             self.data_queue.put(data, timeout=timeout)
-        except Full as exc:
+        except Full:
             self._stop_event.set()
-            if self._on_queue_full is not None:
-                self._on_queue_full(self.device_id)
-            message = (
-                "Settings were applied, but the acquisition queue is full; settings notification was not queued."
-                if data.type == "settings" else "Acquisition queue is full; sample was not queued."
-            )
-            raise Full(message) from exc
+            raise
 
     def read(self) -> DeviceData:
         """全画面の画像を1枚取得し、PC側の取得時刻を付けて返す。"""
@@ -148,13 +141,12 @@ class DummyCamera:
             return DeviceData(self.device_id, "frame", get_counter_ns(), frame)
 
     def start_sampling(
-        self, queue: Queue, *, on_queue_full: Callable[[str], None] | None = None,
+        self, queue: Queue,
     ) -> threading.Thread:
         """設定通知をQueueへ追加してから取得を開始する。取得中なら同じスレッドを返す。
 
         Args:
-            queue (Queue): MeasurementManagerの共通Queue。
-            on_queue_full (Callable[[str], None] | None): 満杯時に機器IDを通知する関数。
+            queue (Queue): 取得データの投入先。MeasurementManagerからは満杯通知付きの投入先が渡される。
 
         Returns:
             threading.Thread: 画像取得スレッド。
@@ -168,13 +160,11 @@ class DummyCamera:
                 raise RuntimeError("Device is not connected.")
             with self._io_lock:
                 self.data_queue = queue
-                self._on_queue_full = on_queue_full
                 self._stop_event.clear()
                 try:
                     self._put_settings()
                 except Full:
                     self.data_queue = None
-                    self._on_queue_full = None
                     raise
             self._sampling_thread = threading.Thread(
                 target=self._sample_data, name=f"sampling-{self.device_id}",
@@ -196,7 +186,6 @@ class DummyCamera:
                 self._sampling_thread = None
             with self._io_lock:
                 self.data_queue = None
-                self._on_queue_full = None
 
     def is_sampling(self) -> bool:
         """画像取得スレッドが動作中かどうかを返す。"""

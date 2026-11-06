@@ -26,7 +26,9 @@ async function action(operation: Operation, id = "camera", settings?: DeviceSett
         case "updateSettings": return backendStore.updateSettings(id, settings ?? backendStore.getSnapshot().settings[id]);
         case "startRecording": return backendStore.startRecording({
             directory: preferencesStore.getSnapshot().defaultDirectory || "mock-recordings",
-            video_options: { camera: { format: "ffv1" } },
+            video_options: Object.fromEntries((backendStore.getSnapshot().devices ?? [])
+                .filter((device) => device.type === "camera" && backendStore.getSnapshot().sampling[device.id])
+                .map((device) => [device.id, { format: "ffv1" as const }])),
         });
         case "stopRecording": return backendStore.stopRecording();
     }
@@ -59,6 +61,7 @@ declare global {
             snapshot: typeof snapshot;
             action: typeof action;
             refresh: typeof applicationRuntime.refresh;
+            scan: typeof backendStore.scanDevices;
             dispose: typeof dispose;
             setPreferences: typeof preferencesStore.update;
             decodePreview: () => Promise<{ width: number; height: number }>;
@@ -67,9 +70,9 @@ declare global {
 }
 
 window.coreTest = {
-    snapshot, action, refresh: applicationRuntime.refresh, dispose, setPreferences: preferencesStore.update,
+    snapshot, action, refresh: applicationRuntime.refresh, scan: backendStore.scanDevices, dispose, setPreferences: preferencesStore.update,
     async decodePreview() {
-        const preview = measurementStore.getSnapshot().previews.camera;
+        const preview = Object.values(measurementStore.getSnapshot().previews)[0];
         const bitmap = await createImageBitmap(preview.jpeg);
         const size = { width: bitmap.width, height: bitmap.height };
         bitmap.close();
@@ -88,7 +91,8 @@ const operations: [Operation, string][] = [
 export function CorePanel({ number }: { number: number }) {
     const backend = useSyncExternalStore(backendStore.subscribe, backendStore.getSnapshot);
     const data = useSyncExternalStore(measurementStore.subscribe, measurementStore.getSnapshot);
-    const [id, setId] = useState("camera");
+    const [selectedId, setId] = useState("");
+    const id = selectedId || backend.devices?.find((device) => device.type === "camera")?.id || backend.devices?.[0]?.id || "camera";
     const [draft, setDraft] = useState("");
     const [error, setError] = useState("");
     let settings = backend.settings[id];
@@ -137,3 +141,6 @@ export function Fixture() {
 
 createRoot(document.getElementById("root")!).render(<StrictMode><Fixture /></StrictMode>);
 void applicationRuntime.start().catch(reportError);
+if (new URLSearchParams(location.search).has("real-verification")) {
+    void import("./real_checks").then(({ verifyRealBackend }) => verifyRealBackend()).catch(reportError);
+}

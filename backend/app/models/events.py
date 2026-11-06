@@ -11,10 +11,12 @@ class MeasurementEvent(BaseModel):
     """1件の取得データと、測定開始基準の経過時間・日時を配信するイベント。"""
 
     type: Literal["measurement"] = "measurement"
+    server_instance_id: str = Field(min_length=1)
+    measurement_id: str = Field(min_length=1)
     id: str
     timestamp_ns: int  # デバイスが取得時に付けた単調増加カウンタの値 [ns]。
     elapsed_s: float  # 共通の測定開始時刻からの経過時間 [s]。
-    datetime: DateTime  # 測定開始基準の実日時
+    datetime: DateTime  # 測定開始時の基準から換算した取得日時。
     data: dict[str, JsonValue]  # 測定値の名前をキーにした、デバイス固有のJSONデータ。
 
 
@@ -28,6 +30,8 @@ class CameraPreviewEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["camera_preview"] = "camera_preview"
+    server_instance_id: str = Field(min_length=1)
+    measurement_id: str = Field(min_length=1)
     id: str = Field(min_length=1)
     frame_index: int = Field(ge=0)
     timestamp_ns: int = Field(ge=0)

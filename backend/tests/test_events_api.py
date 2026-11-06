@@ -92,6 +92,7 @@ class EventsApiTests(unittest.IsolatedAsyncioTestCase):
     def measurement_event(self, device_id="meter-A", power=0.001):
         """測定値と取得時刻を持つ、検証済みの配信用辞書を作成する。"""
         return MeasurementEvent(
+            server_instance_id="server-test", measurement_id="period-test",
             id=device_id, timestamp_ns=123456789, elapsed_s=1.25,
             datetime=datetime.fromisoformat("2026-11-01T00:00:01.250000+09:00"),
             data={"power_w": power},
@@ -100,6 +101,7 @@ class EventsApiTests(unittest.IsolatedAsyncioTestCase):
     def preview_event(self, device_id="camera-A", frame_index=7):
         """JPEGと対応する時刻・サイズを持つ配信用辞書を作成する。"""
         return CameraPreviewEvent(
+            server_instance_id="server-test", measurement_id="period-test",
             id=device_id, frame_index=frame_index, timestamp_ns=10**18 + frame_index,
             width=2, height=2, jpeg=PREVIEW_JPEG,
         ).model_dump()
@@ -124,6 +126,7 @@ class EventsApiTests(unittest.IsolatedAsyncioTestCase):
         metadata, jpeg = self.decode_preview(await asyncio.wait_for(outgoing.get(), 1))
         self.assertEqual({
             "type": "camera_preview", "id": "camera-A", "frame_index": 7,
+            "server_instance_id": "server-test", "measurement_id": "period-test",
             "timestamp_ns": str(event["timestamp_ns"]), "width": 2, "height": 2,
         }, metadata)
         self.assertEqual(PREVIEW_JPEG, jpeg)
@@ -190,6 +193,46 @@ class EventsApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(expected, metadata["frame_index"])
             self.assertTrue(outgoing.empty())
             await asyncio.wait_for(subscriber.join(), 1)
+
+    async def test_slow_numeric_and_image_send_keep_the_original_ids(self):
+        numeric_entered, image_entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        send_json, send_bytes = WebSocket.send_json, WebSocket.send_bytes
+
+        async def delayed_json(websocket, data, *args, **kwargs):
+            if not numeric_entered.is_set():
+                numeric_entered.set()
+                await release.wait()
+            await send_json(websocket, data, *args, **kwargs)
+
+        async def delayed_bytes(websocket, data):
+            if not image_entered.is_set():
+                image_entered.set()
+                await release.wait()
+            await send_bytes(websocket, data)
+
+        with patch.object(WebSocket, "send_json", new=delayed_json), \
+                patch.object(WebSocket, "send_bytes", new=delayed_bytes):
+            _, _, numeric = await self.connect()
+            _, _, image = await self.connect("/ws/camera-A?maxsize=1")
+            self.broadcaster.publish(self.measurement_event(), key=None)
+            self.broadcaster.publish(self.preview_event(frame_index=0), key="camera-A")
+            try:
+                await asyncio.wait_for(numeric_entered.wait(), 1)
+                await asyncio.wait_for(image_entered.wait(), 1)
+                later_numeric = self.measurement_event() | {"server_instance_id": "server-next", "measurement_id": "period-next"}
+                later_image = self.preview_event(frame_index=1) | {"server_instance_id": "server-next", "measurement_id": "period-next"}
+                self.broadcaster.publish(later_numeric, key=None)
+                self.broadcaster.publish(later_image, key="camera-A")
+                await asyncio.sleep(0)
+            finally:
+                release.set()
+
+            for server_id, period_id in (("server-test", "period-test"), ("server-next", "period-next")):
+                number = json.loads((await asyncio.wait_for(numeric.get(), 1))["text"])
+                metadata, _ = self.decode_preview(await asyncio.wait_for(image.get(), 1))
+                for event in (number, metadata):
+                    self.assertEqual(server_id, event["server_instance_id"])
+                    self.assertEqual(period_id, event["measurement_id"])
 
     async def test_keyed_subscription_accepts_unregistered_key_and_sends_json(self):
         _, _, outgoing = await self.connect("/ws/meter-A")
@@ -776,8 +819,8 @@ class EventsApiTests(unittest.IsolatedAsyncioTestCase):
                     event = MeasurementEvent.model_validate_json(message["text"])
                     self.assertIn(event.id, device_ids)
                     self.assertIn("power_w", event.data)
-                    self.assertEqual(manager._get_elapsed(event.timestamp_ns), event.elapsed_s)
-                    self.assertEqual(manager._get_datetime(event.timestamp_ns), event.datetime)
+                    self.assertEqual(manager._get_elapsed(event.timestamp_ns, manager._measurement_period), event.elapsed_s)
+                    self.assertEqual(manager._get_datetime(event.timestamp_ns, manager._measurement_period), event.datetime)
                     received[event.id] = event
 
             self.assertFalse(manager.is_recording())

@@ -4,7 +4,7 @@
 
 POST    /api/recordings/start       // 保存開始
 POST    /api/recordings/stop        // 保存終了
-GET     /api/recordings/status      // 保存状態・保存先・エラーを取得
+GET     /api/recordings/status      // 記録ID・対象ごとの保存状態・設定制限・保存先・エラーを取得
 """
 
 from fastapi import APIRouter, HTTPException, Request
@@ -40,7 +40,8 @@ def start_recording(request: Request, body: StartRecordingRequest) -> RecordingS
 def stop_recording(request: Request) -> RecordingStatus:
     """停止を要求し、動画・CSV・最終メタデータの保存完了を待つ。
 
-    待機中はstatusのis_stoppingがTrueとなり、新しい記録を開始できない。
+    Processorが停止命令を処理すると保存受付を止め、終了処理中はstatusのis_stoppingがTrueになる。
+    停止命令の処理前のロック・Queue待機中は、保存受付が続く場合がある。
 
     Args:
         request (Request): FastAPIリクエスト。
@@ -57,7 +58,7 @@ def stop_recording(request: Request) -> RecordingStatus:
 
 @router.get("/status", response_model=RecordingStatus)
 def get_recording_status(request: Request) -> RecordingStatus:
-    """保存状態を取得する。
+    """記録ID・開始時対象・保存状態・設定制限を取得する。終了処理の完了は待たない。
 
     Args:
         request (Request): FastAPIリクエスト。
