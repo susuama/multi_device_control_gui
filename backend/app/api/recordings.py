@@ -4,7 +4,7 @@
 
 POST    /api/recordings/start       // 保存開始
 POST    /api/recordings/stop        // 保存終了
-GET     /api/recordings/status      // 記録ID・対象ごとの保存状態・設定制限・保存先・エラーを取得
+GET     /api/recordings/status      // 記録ID・対象の保存状態・保存先・記録時刻・エラーを取得
 """
 
 from fastapi import APIRouter, HTTPException, Request

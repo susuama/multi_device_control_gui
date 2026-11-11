@@ -1,0 +1,86 @@
+.recording-view {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+    min-width: 0;
+}
+.recording-view .recording-card {
+    min-width: 0;
+    padding: var(--spacing-2);
+    border-radius: var(--radius-container);
+    background: var(--color-background-card);
+}
+.recording-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-2);
+    margin-bottom: var(--spacing-2);
+}
+.recording-heading h3 { margin: 0; }
+.recording-collapsible > summary { cursor: pointer; list-style: none; }
+.recording-collapsible > summary::-webkit-details-marker { display: none; }
+.recording-collapsible > summary h3 { margin-right: auto; }
+.recording-collapsible:not([open]) > summary { margin-bottom: 0; }
+.recording-collapsible > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.recording-chevron { width: 7px; height: 7px; flex-shrink: 0; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); }
+.recording-collapsible[open] .recording-chevron { transform: rotate(45deg); }
+.recording-target-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.recording-target-list li {
+    min-width: 0;
+    padding: var(--spacing-2);
+    border-radius: var(--radius-element);
+}
+.recording-target-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--spacing-1) var(--spacing-2);
+}
+.recording-device-name {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.recording-device-name strong { color: var(--text-emphasis); font-size: var(--font-size-emphasis); overflow-wrap: anywhere; }
+.recording-device-name small, .recording-hint, .recording-empty { color: var(--muted); overflow-wrap: anywhere; }
+.recording-device-name small { font-size: var(--ui-font-size); }
+.recording-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--spacing-1-5); }
+.recording-target-state { color: var(--muted); }
+.recording-active { color: var(--focus); }
+.recording-success { color: var(--success); }
+.recording-error { color: var(--error); }
+.recording-state { font-weight: var(--font-weight-semibold); }
+.recording-hint { display: block; margin-top: var(--spacing-1); }
+.recording-hint-warning { color: var(--warning); }
+.recording-fields { display: flex; flex-direction: column; gap: var(--spacing-1); }
+.recording-field { display: grid; grid-template-columns: minmax(0, 11em) minmax(0, 1fr); align-items: center; gap: var(--spacing-2); }
+.recording-field input {
+    width: 100%; min-width: 0; height: var(--ui-control-height); padding: 0 var(--spacing-1);
+    border: 1px solid var(--border); border-radius: 4px; background: var(--control); text-align: right;
+}
+.recording-field select { width: 100%; min-width: 0; text-align: left; }
+.recording-field select option { text-align: left; }
+.recording-empty { margin: var(--spacing-1) 0; }
+.recording-controls { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: var(--spacing-2); margin-top: var(--spacing-4); }
+.recording-controls .recording-hint { flex: 1 1 12em; margin: 0; }
+.recording-main-actions { justify-content: flex-end; margin-left: auto; }
+.recording-main-actions .ui-button { font-weight: var(--font-weight-semibold); }
+.recording-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--spacing-2); margin-top: var(--spacing-2); }
+.recording-summary .ui-button { background: var(--control); border: 1px solid var(--border); border-radius: 4px; }
+.recording-period { display: flex; flex-wrap: wrap; gap: var(--spacing-1) var(--spacing-2); min-width: 0; }
+.recording-period > span:first-child { color: var(--muted); }
+.recording-results-scroll { overflow-x: auto; }
+.recording-results th { color: var(--muted); font-weight: var(--font-weight-semibold); white-space: nowrap; }
+.recording-results td { overflow-wrap: anywhere; }
+@container (max-width: 280px) {
+    .recording-field { grid-template-columns: minmax(0, 1fr); gap: var(--spacing-1); }
+}

@@ -3,6 +3,7 @@
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -56,6 +57,7 @@ class RecordingTargetStatus(BaseModel):
     video_options: VideoRecordingOptions | None = None
     state: Literal["not_started", "recording", "stopping", "completed", "empty", "failed"] = "not_started"
     error: str | None = None
+    acquisition_error: str | None = None  # 保存失敗とは別に、記録中の取得失敗を保持する。
     locked_settings: list[str] = Field(default_factory=list)
 
 
@@ -67,6 +69,9 @@ class RecordingStatus(BaseModel):
     server_instance_id: str
     recording_id: str | None = None
     measurement_id: str | None = None
+    
+    recording_started_at: datetime | None = None
+    recording_stopped_at: datetime | None = None
     targets: dict[str, RecordingTargetStatus] = Field(default_factory=dict)
     is_recording: bool      # 新しい測定データを保存する状態にあるか。
     is_stopping: bool = False  # 終了処理中、または未解放の保存リソースが残るか。

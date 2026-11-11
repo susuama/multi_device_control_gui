@@ -3,6 +3,7 @@
 
 GET     /api/windows                // 現在表示されているウィンドウの一覧を取得する
 POST    /api/windows                // 新しいpywebviewウィンドウを作成する
+POST    /api/windows/open-recording-folder // 現在の記録の保存先を開く
 
 以下は実装予定で、現在はエンドポイントを登録していない。
 GET     /api/windows/{id}           // 指定されたウィンドウの情報を取得する
@@ -11,6 +12,7 @@ DELETE  /api/windows/{id}           // 指定されたウィンドウを閉じ�
 """
 
 from fastapi import APIRouter, Request, HTTPException
+from pydantic import BaseModel
 
 from backend.app.models.windows import WindowInfo, CreateWindowRequest
 
@@ -18,6 +20,31 @@ router = APIRouter(
     prefix="/api/windows",
     tags=["windows"],
 )
+
+
+class OpenRecordingFolderRequest(BaseModel):
+    recording_id: str
+    server_instance_id: str
+
+
+@router.post("/open-recording-folder")
+def open_recording_folder(value: OpenRecordingFolderRequest, request: Request) -> dict[str, bool]:
+    """表示中の記録IDを照合し、その記録の保存先を開く。"""
+    manager = request.app.state.window_manager
+    if manager is None:
+        raise HTTPException(status_code=503, detail="デスクトップ機能を利用できません。")
+    
+    status = request.app.state.measurement_manager.get_recording_status()
+    if (not status.directory 
+        or status.recording_id != value.recording_id 
+        or status.server_instance_id != value.server_instance_id
+        ):
+        raise HTTPException(status_code=409, detail="記録が変わったか、保存先がありません。状態を再取得してください。")
+    try:
+        manager.open_folder(status.directory)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"フォルダを開けませんでした: {exc}") from exc
+    return {"opened": True}
 
 
 @router.get("", response_model=list[WindowInfo])

@@ -16,6 +16,7 @@ export interface RecordingTarget {
     video_options: VideoRecordingOptions | null;
     state: "not_started" | "recording" | "stopping" | "completed" | "empty" | "failed";
     error: string | null;
+    acquisition_error?: string | null;
     locked_settings: string[];
 }
 
@@ -23,6 +24,8 @@ export interface RecordingStatus {
     server_instance_id: string;
     recording_id: string | null;
     measurement_id: string | null;
+    recording_started_at?: string | null;
+    recording_stopped_at?: string | null;
     targets: Record<string, RecordingTarget>;
     is_recording: boolean;
     is_stopping: boolean;

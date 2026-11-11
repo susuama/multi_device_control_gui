@@ -22,6 +22,7 @@ import uvicorn
 
 from backend.app.main import app
 from desktop.main import WindowManager
+from desktop.websocket_protocol import ShutdownSafeWebSocketProtocol
 
 
 def main() -> None:
@@ -39,6 +40,7 @@ def main() -> None:
         host="127.0.0.1",
         port=8000,
         reload=False,
+        ws=ShutdownSafeWebSocketProtocol,
     )
     server = uvicorn.Server(config)
 

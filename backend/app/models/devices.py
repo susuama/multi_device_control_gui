@@ -22,6 +22,7 @@ class DeviceInfo(BaseModel):
     model: str          # モデル名
     serial_number: str  # シリアル番号。機器に登録された値
     address: str        # デバイスのアドレス。
+    error: str | None = None  # 接続・取得・後始末で保持しているエラー理由。
     status: Literal[    # デバイスの状態
         "connected",
         "disconnected",

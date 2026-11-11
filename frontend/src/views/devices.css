@@ -1,0 +1,180 @@
+.device-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--spacing-1-5); }
+.device-list-heading { display: flex; align-items: center; gap: var(--spacing-2); margin-bottom: var(--spacing-2); }
+.device-section .device-list-heading h3 { margin: 0 auto 0 0; }
+.device-list-heading > span { color: var(--muted); white-space: nowrap; }
+.application .device-list-heading button { display: inline-flex; align-items: center; gap: var(--spacing-1); flex-shrink: 0; }
+.device-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--spacing-1) var(--spacing-2);
+    min-width: 0; padding: var(--spacing-1); border: 1px solid transparent; border-radius: 4px;
+    background: transparent;
+}
+.device-row:hover { background: var(--color-neutral); }
+.device-row.selected { border-color: var(--focus); box-shadow: inset 0 0 0 1px var(--focus); }
+.device-label { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.device-label > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-label strong { color: var(--text-emphasis); font-size: var(--font-size-emphasis); font-weight: var(--font-weight-emphasis); }
+.device-label small { font-size: var(--ui-font-size); color: var(--muted); }
+.device-status { flex-shrink: 0; color: var(--muted); }
+.device-status-connected { color: var(--success); }
+.device-status-error { color: var(--error); }
+.device-row-actions { display: flex; flex-direction: column; align-items: flex-end; gap: calc(var(--ui-space-unit) * .75); }
+.application .device-row-actions button { border-radius: 999px; }
+.device-states { display: flex; align-items: center; justify-content: center; gap: var(--spacing-1-5); white-space: nowrap; }
+.device-list-section .device-status-connected, .device-details-heading .device-status-connected { color: var(--text); }
+.device-list-section .device-status-connected::before, .device-details-heading .device-status-connected::before {
+    content: "✓"; color: var(--success); margin-right: var(--spacing-1); font-weight: 600;
+}
+.device-list-section .device-status-disconnected::before, .device-details-heading .device-status-disconnected::before {
+    content: "×"; color: var(--error); margin-right: var(--spacing-1); font-weight: 600;
+}
+.device-sampling { color: var(--warning); }
+.device-sampling-active { color: var(--focus); }
+.device-details-heading { display: flex; align-items: center; flex-wrap: wrap; gap: var(--spacing-2); margin-bottom: var(--spacing-2); }
+.device-details-heading strong { color: var(--text-emphasis); font-size: var(--font-size-emphasis); font-weight: var(--font-weight-emphasis); overflow-wrap: anywhere; }
+.device-details-heading .device-status { margin-left: auto; }
+.device-selector { display: flex; align-items: center; gap: var(--spacing-2); min-width: 0; }
+.device-selector select { min-width: 100px; max-width: 300px; }
+.device-section { --device-section-background: var(--color-background-card); max-width: 640px; padding: var(--spacing-2); margin-bottom: var(--spacing-2); background: var(--device-section-background); border-radius: 4px; }
+.device-section h3 { font-size: var(--ui-font-size); font-weight: 400; margin: 0 0 var(--spacing-2); }
+.device-details-list { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: var(--spacing-0-5) var(--spacing-2); margin: 0; }
+.device-details-list dt { color: var(--muted); }
+.device-details-list dd { margin: 0; overflow-wrap: anywhere; }
+.device-setting-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.setting-mode { color: var(--muted); font-size: var(--ui-font-size-small); border: 1px solid var(--border); border-radius: 3px; padding: 0 calc(var(--ui-space-unit) * .75); }
+.device-setting-row { display: grid; grid-template-columns: minmax(90px, 160px) minmax(0, 1fr); align-items: center; gap: var(--spacing-2); min-height: var(--ui-chrome-height); }
+.device-setting-row input:not([type=checkbox]) { width: 100%; min-width: 0; height: var(--ui-control-height); padding: 0 var(--spacing-1); border: 1px solid var(--border); border-radius: 4px; background: var(--control); text-align: right; font-variant-numeric: tabular-nums; }
+.device-setting-row input[type=checkbox] { margin: 0; accent-color: var(--accent); vertical-align: middle; }
+.device-setting-row select { width: 100%; background: var(--input); }
+.device-unit-input { display: flex; align-items: center; gap: var(--spacing-1); }
+.device-unit-input > span { flex: 0 0 24px; color: var(--muted); }
+.device-setting-fields:disabled { opacity: .65; }
+.device-section + .view-message { padding-top: 0; }
+.view-actions { flex-wrap: wrap; align-items: flex-start; }
+.measurement-section { max-width: none; overflow-x: auto; }
+.measurement-table { width: 100%; border-collapse: collapse; text-align: left; }
+.measurement-table th, .measurement-table td { padding: var(--spacing-1); border-bottom: 1px solid var(--border); vertical-align: top; }
+.measurement-table td small { display: block; overflow-wrap: anywhere; }
+.measurement-reasons { display: block; color: var(--muted); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* デバイス管理は Astryx の文字・角丸・余白トークンで統一する。 */
+.device-manager {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-2);
+    max-width: 640px;
+    min-width: 0;
+}
+.device-manager .device-manager-card {
+    flex-shrink: 0;
+    margin: 0;
+    border: 0;
+    border-radius: var(--radius-container);
+    padding: var(--spacing-2);
+    background: var(--color-background-card);
+}
+.device-manager .device-section h3 {
+    font-weight: var(--font-weight-semibold);
+}
+.device-manager .device-list-heading {
+    gap: var(--spacing-1-5);
+    margin-bottom: var(--spacing-2);
+    min-width: 0;
+}
+.device-manager .device-list-count {
+    flex-shrink: 0;
+    height: var(--ui-control-height);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: var(--text-supporting-size);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.device-manager .device-list {
+    gap: var(--spacing-1);
+}
+.device-manager .device-row {
+    position: relative;
+    padding: var(--spacing-1-5);
+    border-radius: var(--radius-element);
+}
+.device-manager .device-row:hover {
+    background: var(--color-neutral);
+}
+.device-manager .device-list-section .ui-button {
+    background: var(--control);
+    border: 1px solid var(--border);
+}
+.device-manager .device-action-connect .ui-button:hover:not(:disabled) {
+    border-color: var(--color-info);
+    background-image: none;
+}
+.device-manager .device-action-disconnect .ui-button:hover:not(:disabled) {
+    border-color: var(--color-error);
+    background-image: none;
+}
+.theme-light .device-manager .device-row:hover {
+    background: var(--app-color-input);
+}
+.application .device-manager .device-select {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: inherit;
+    background: transparent;
+    box-shadow: none;
+}
+.application .device-manager .device-select:hover {
+    filter: none;
+}
+.application .device-manager .device-select:focus-visible {
+    outline-offset: -2px;
+}
+.device-manager .device-label {
+    gap: var(--spacing-0-5);
+    pointer-events: none;
+}
+.device-manager .device-model {
+    color: var(--text-emphasis);
+    font-size: var(--font-size-emphasis);
+    font-weight: var(--font-weight-emphasis);
+}
+.device-manager .device-description {
+    font-size: var(--ui-font-size);
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.4;
+    color: var(--color-text-secondary);
+}
+.device-manager .device-row-actions {
+    position: relative;
+    z-index: 2;
+    gap: var(--spacing-1);
+    pointer-events: none;
+}
+.device-manager .device-row-actions .ui-button {
+    min-width: calc(var(--ui-control-height) * 2.5);
+    pointer-events: auto;
+}
+.device-manager .device-states {
+    justify-content: flex-end;
+    font-size: var(--ui-font-size);
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.4;
+}
+.device-manager .device-states .device-status::before {
+    font-size: var(--font-size-emphasis);
+}
+.device-manager .device-details-heading .device-model {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.device-manager .device-details-list {
+    grid-template-columns: minmax(0, 7em) minmax(0, 1fr);
+    gap: var(--spacing-1) var(--spacing-2);
+}

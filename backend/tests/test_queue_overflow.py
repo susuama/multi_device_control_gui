@@ -360,7 +360,7 @@ class DeviceQueueFullTests(unittest.TestCase):
                 output.put_nowait(object())
                 device.SETTINGS_PUT_TIMEOUT = 0.01
                 notices = []
-                source = _SamplingQueue(output, self.period, on_queue_full=notices.append)
+                source = _SamplingQueue(output, self.period, on_queue_full=notices.append, on_error=lambda *_: None)
                 with self.assertRaisesRegex(queue.Full, "settings notification was not queued"):
                     device.start_sampling(source)
                 self.assertEqual(["test"], notices)
@@ -376,7 +376,7 @@ class DeviceQueueFullTests(unittest.TestCase):
                 device.connect()
                 output = queue.Queue(maxsize=1)
                 notices = []
-                source = _SamplingQueue(output, self.period, on_queue_full=notices.append)
+                source = _SamplingQueue(output, self.period, on_queue_full=notices.append, on_error=lambda *_: None)
                 thread = device.start_sampling(source)
                 thread.join(1)
                 self.assertFalse(thread.is_alive())
@@ -395,7 +395,7 @@ class DeviceQueueFullTests(unittest.TestCase):
                 notices = []
                 output = queue.Queue(maxsize=1)
                 output.put_nowait(object())
-                device.data_queue = _SamplingQueue(output, self.period, on_queue_full=notices.append)
+                device.data_queue = _SamplingQueue(output, self.period, on_queue_full=notices.append, on_error=lambda *_: None)
                 device.SETTINGS_PUT_TIMEOUT = 0.01
                 changes = {"gain": 2.0} if driver is DummyCamera else {"wavelength": 650.0}
                 settings = device.get_settings().model_dump() | changes

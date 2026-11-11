@@ -104,6 +104,53 @@ class VideoRecorderTests(unittest.TestCase):
                         self.assertEqual(bytes(expected), decoded)
                         self.assertEqual(["0", "1", "2"], [row["frame_index"] for row in self.read_rows(recorder)])
 
+    def assert_ffv1_round_trip(self, settings, name):
+        """保存ROIの全画素と、3フレームの枚数・順序を実FFmpegで照合する。
+
+        Args:
+            settings (CameraSetting): 元画像の寸法・画素形式と保存ROI。
+            name (str): テスト用の動画ファイル名。拡張子は保存形式から付ける。
+        """
+        self.settings = settings
+        recorder = self.recorder(settings=settings, name=name)
+        recorder.start()
+        roi = settings.roi
+        x, y, width, height = (roi.x, roi.y, roi.width, roi.height) if roi else (0, 0, settings.width, settings.height)
+        expected = bytearray()
+        for index in range(3):
+            if settings.pixel_format == "mono8":
+                image = self.image(index)
+                expected.extend(image[row, col] for row in range(y, y + height) for col in range(x, x + width))
+            else:
+                image = self.color_image(settings.pixel_format, index)
+                expected.extend(image[row, col, channel] for row in range(y, y + height)
+                                for col in range(x, x + width) for channel in range(3))
+            self.assertTrue(recorder.write(CameraFrame(image, index), index + 100, index / settings.fps))
+        recorder.stop()
+        info, decoded = self.read_video(recorder.path, "gray" if settings.pixel_format == "mono8" else settings.pixel_format)
+        self.assertEqual((width, height, "3"), (info["width"], info["height"], info["nb_read_frames"]))
+        self.assertEqual(bytes(expected), decoded)
+        self.assertEqual(["0", "1", "2"], [row["frame_index"] for row in self.read_rows(recorder)])
+        self.assertEqual({"state": "completed", "error": None}, recorder.get_result())
+
+    def test_ffv1_preserves_pixels_at_slice_size_boundaries_and_large_dimensions(self):
+        for width, height in ((4, 3), (32, 24), (352, 288), (353, 288), (352, 289), (640, 480), (641, 479), (64, 1024)):
+            with self.subTest(width=width, height=height):
+                settings = CameraSetting(width=width, height=height, fps=10, exposure=0.05, gain=1)
+                self.assert_ffv1_round_trip(settings, f"mono-{width}x{height}")
+
+    def test_ffv1_uses_saved_roi_dimensions_and_preserves_large_color_frames(self):
+        for pixel_format in ("mono8", "rgb24", "bgr24"):
+            for name, width, height, roi in (
+                ("full", 640, 480, None),
+                ("tiny-roi", 640, 480, {"x": 3, "y": 2, "width": 4, "height": 3}),
+                ("tall-roi", 80, 1030, {"x": 3, "y": 2, "width": 64, "height": 1024}),
+            ):
+                with self.subTest(pixel_format=pixel_format, roi=name):
+                    settings = CameraSetting(width=width, height=height, fps=10, exposure=0.05, gain=1,
+                        pixel_format=pixel_format, roi=roi)
+                    self.assert_ffv1_round_trip(settings, f"{pixel_format}-{name}")
+
     def test_rgb_and_bgr_mpeg4_keep_color_channel_order(self):
         for pixel_format in ("rgb24", "bgr24"):
             with self.subTest(pixel_format=pixel_format):

@@ -11,6 +11,15 @@ test("取得・記録状態とバックエンドが返す設定ロックを共�
     assert.equal(getOperationAvailability(state, { operation: "updateSettings", deviceId: "camera", settings: { fps: 10, gain: 2, roi: null } }).allowed, true);
     assert.match(getOperationAvailability(state, { operation: "updateSettings", deviceId: "camera", settings: { fps: 11, gain: 1, roi: null } }).reason, /fps/);
 });
+
+test("機器エラー時は切断を許可し、接続・取得開始・設定変更を拒否する", () => {
+    const state = snapshot();
+    state.devices[0].status = "error";
+    assert.equal(getOperationAvailability(state, { operation: "disconnect", deviceId: "camera" }).allowed, true);
+    for (const operation of ["connect", "startSampling", "updateSettings"]) {
+        assert.equal(getOperationAvailability(state, { operation, deviceId: "camera" }).allowed, false);
+    }
+});
 test("未確認・処理中・結果不明では操作を拒否する", () => {
     const state = snapshot();
     state.synchronization.status = "error";
@@ -30,5 +39,13 @@ test("GETで確認した終了処理中は停止を再試行でき、進行中�
     assert.equal(getOperationAvailability(state, { operation: "stopRecording" }).allowed, true);
     assert.equal(getOperationAvailability(state, { operation: "startRecording" }).allowed, false);
     state.requests["recording/stop"] = { pending: 1, writing: true, outcomeUnknown: false };
+    assert.equal(getOperationAvailability(state, { operation: "stopRecording" }).allowed, false);
+});
+
+test("起動済み記録の終了エラーは両フラグfalseでも明示停止を許可し、未作成なら拒否する", () => {
+    const state = snapshot();
+    state.recording = { is_recording: false, is_stopping: false, recording_id: "r", error: "final JSON failed" };
+    assert.equal(getOperationAvailability(state, { operation: "stopRecording" }).allowed, true);
+    state.recording.recording_id = null;
     assert.equal(getOperationAvailability(state, { operation: "stopRecording" }).allowed, false);
 });

@@ -3,7 +3,7 @@
 
 
 GET  /api/devices                   // DeviceManagerに登録されている全デバイスの情報を取得する
-POST /api/devices/scan              // デバイスをスキャンし、検出結果をDeviceManagerへ反映して一覧を返す
+POST /api/devices/scan              // 管理対象と探索情報を更新し、DiscoveredDeviceの一覧を返す
 
 GET  /api/devices/{id}              // 指定されたデバイスの情報を取得する
 POST /api/devices/{id}/connect      // 指定されたデバイスに接続する
@@ -23,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
 # デバイスの情報や設定の型定義
-from backend.app.models.devices import DeviceInfo
+from backend.app.models.devices import DeviceInfo, DiscoveredDevice
 from backend.app.services.measurement_manager import RecordingSettingsConflictError
 
 router = APIRouter(
@@ -44,26 +44,25 @@ def get_devices(request: Request) -> list[DeviceInfo]:
     """
     device_manager = request.app.state.device_manager
     # 通信ハンドルを含む機器インスタンスではなく、API用の情報だけを返す。
-    return [device.get_info() for device in device_manager.get_all().values()]
+    return [device_manager.get_info(device_id) for device_id in device_manager.get_all()]
 
 
-@router.post("/scan", response_model=list[DeviceInfo])
-def scan_devices(request: Request) -> list[DeviceInfo]:
-    """デバイスをスキャンして管理対象を更新する。
+@router.post("/scan", response_model=list[DiscoveredDevice])
+def scan_devices(request: Request) -> list[DiscoveredDevice]:
+    """管理対象と探索情報を更新し、今回の探索結果を返す。
 
     Args:
         request (Request): FastAPIリクエスト。
 
     Returns:
-        return (list[DeviceInfo]): 更新後のデバイス一覧。
+        list[DiscoveredDevice]: 今回のスキャンで検出した機器の探索情報。
     """
     device_manager = request.app.state.device_manager
     try:
         # 探索と登録更新は既存のDeviceManagerにまとめて任せる。
-        device_manager.scan()
+        return device_manager.scan()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return get_devices(request)
 
 
 @router.get("/{device_id}", response_model=DeviceInfo)
@@ -79,12 +78,12 @@ def get_device(device_id: str, request: Request) -> DeviceInfo:
     """
     device_manager = request.app.state.device_manager
     try:
-        device = device_manager.get(device_id)
+        device_manager.get(device_id)
     except KeyError as exc:
         # 管理サービスの「機器なし」をAPIの404へ変換する。
         raise HTTPException(status_code=404, detail="Device not found") from exc
 
-    return device.get_info()
+    return device_manager.get_info(device_id)
 
 @router.post("/{device_id}/connect")
 def connect_device(device_id: str, request: Request) -> dict[str, bool]:
@@ -130,12 +129,13 @@ def disconnect_device(device_id: str, request: Request) -> dict[str, bool]:
         # 対象機器の取得を止め、管理情報を整理してから切断する。
         # ほかの機器が取得中なら、共通のデータ処理は継続する。
         # 停止がタイムアウトした場合は、切断成功の応答を返さない。
-        measurement_manager.stop_sampling(device_id)
+        if measurement_manager.camera_preview_service is not None:
+            measurement_manager.camera_preview_service.stop_camera(device_id)
         success = device_manager.disconnect(device_id)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not success:
-        raise HTTPException(status_code=503, detail="Could not disconnect device")
+        raise HTTPException(status_code=503, detail=device_manager.get(device_id).last_error or "Could not disconnect device")
     return {"success": True}
 
 

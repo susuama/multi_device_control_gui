@@ -23,6 +23,8 @@ export function validateRecordingStatus(value: RecordingStatus): void {
     if (!value || typeof value.server_instance_id !== "string" || !value.server_instance_id
         || !nullableString(value.recording_id) || value.recording_id === ""
         || !nullableString(value.measurement_id) || value.measurement_id === ""
+        || !(value.recording_started_at === undefined || nullableString(value.recording_started_at))
+        || !(value.recording_stopped_at === undefined || nullableString(value.recording_stopped_at))
         || typeof value.is_recording !== "boolean" || typeof value.is_stopping !== "boolean"
         || !nullableString(value.directory) || !nullableString(value.name) || !nullableString(value.error)
         || !value.targets || typeof value.targets !== "object" || Array.isArray(value.targets)
@@ -32,7 +34,8 @@ export function validateRecordingStatus(value: RecordingStatus): void {
     for (const target of Object.values(value.targets)) {
         if (!target || typeof target.type !== "string" || !target.settings_at_start || typeof target.settings_at_start !== "object"
             || !["not_started", "recording", "stopping", "completed", "empty", "failed"].includes(target.state)
-            || !nullableString(target.error) || !Array.isArray(target.locked_settings)
+            || !nullableString(target.error) || !(target.acquisition_error === undefined || nullableString(target.acquisition_error))
+            || !Array.isArray(target.locked_settings)
             || target.locked_settings.some((key) => typeof key !== "string")
             || !(target.video_options === null || target.video_options && ["h264_lossless", "ffv1", "mpeg4"].includes(target.video_options.format))) {
             throw new UnsupportedApiContractError("記録対象の設定・保存状態・設定ロックを確認できません。");

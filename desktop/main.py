@@ -3,6 +3,8 @@ import uuid
 import os
 from pathlib import Path
 
+CLOSE_CONFIRMATION = "このウィンドウを閉じますか？\n最後のウィンドウを閉じると、取得・記録の終了処理を開始します。"
+
 class WindowManager:
     def __init__(self, base_url: str) -> None:
         """ウィンドウ管理クラスを初期化する。
@@ -23,6 +25,8 @@ class WindowManager:
             height=800,
             text_select=True,
             zoomable=False,
+            confirm_close=True,
+            localization={"global.quitConfirmation": CLOSE_CONFIRMATION},
         )
         window_id = str(uuid.uuid4())
         window.id = window_id  # ウィンドウに一意のIDを設定
@@ -64,6 +68,15 @@ class WindowManager:
         """
         return list(self.windows.values())
 
+    def open_folder(self, path: str) -> None:
+        """指定された既存のフォルダをエクスプローラーで開く。"""
+        if os.name != "nt":
+            raise OSError("フォルダを開く操作はWindowsでのみ利用できます。")
+        folder = Path(path)
+        if not folder.is_dir():
+            raise FileNotFoundError(f"フォルダが見つかりません: {path}")
+        os.startfile(folder)
+
     def new_window(self, title: str, path: str,) -> webview.Window:
         """新しいウィンドウを作成する。
 
@@ -83,6 +96,8 @@ class WindowManager:
             height=700,
             text_select=True,
             zoomable=False,
+            confirm_close=True,
+            localization={"global.quitConfirmation": CLOSE_CONFIRMATION},
         )
 
         window_id = str(uuid.uuid4())

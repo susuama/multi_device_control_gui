@@ -21,7 +21,7 @@ class SamplingQueueTests(unittest.TestCase):
 
     def test_period_and_start_result_are_attached_before_and_after_start(self):
         output = queue.Queue()
-        source = _SamplingQueue(output, self.period, on_queue_full=self.on_queue_full)
+        source = _SamplingQueue(output, self.period, on_queue_full=self.on_queue_full, on_error=lambda *_: None)
         data = DeviceData("meter", "sample", 200, {"power_w": 1.0})
         source.put(data)
         source.accepted = True
@@ -38,7 +38,7 @@ class SamplingQueueTests(unittest.TestCase):
 
     def test_full_queue_keeps_one_slot_per_item_and_preserves_put_options(self):
         output = queue.Queue(maxsize=1)
-        source = _SamplingQueue(output, self.period, on_queue_full=self.on_queue_full)
+        source = _SamplingQueue(output, self.period, on_queue_full=self.on_queue_full, on_error=lambda *_: None)
         data = DeviceData("meter", "sample", 200, {})
         source.put(data, block=False)
         with self.assertRaisesRegex(queue.Full, "sample was not queued"):
@@ -50,7 +50,7 @@ class SamplingQueueTests(unittest.TestCase):
 
     def test_failed_start_rejects_later_data(self):
         output = queue.Queue()
-        source = _SamplingQueue(output, self.period, on_queue_full=self.on_queue_full)
+        source = _SamplingQueue(output, self.period, on_queue_full=self.on_queue_full, on_error=lambda *_: None)
         source.ready.set()
         with self.assertRaisesRegex(RuntimeError, "did not start"):
             source.put(DeviceData("meter", "sample", 200, {}))

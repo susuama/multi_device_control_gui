@@ -77,7 +77,8 @@ class DummyCamera:
                     self.last_error = None
                 return True
             except Exception as exc:
-                self.last_error = str(exc) or type(exc).__name__
+                reason = str(exc) or type(exc).__name__
+                self.last_error = f"{self.last_error}; 切断失敗: {reason}" if self.last_error else reason
                 self.logger.exception("Could not disconnect device %s", self.device_id)
                 return False
 
@@ -181,8 +182,9 @@ class DummyCamera:
                 thread.join(timeout=self.STOP_TIMEOUT)
                 if thread.is_alive():
                     # 参照を残し、停止の再試行と重複起動の拒否に使う。
-                    self.last_error = "Timed out waiting for sampling to stop."
-                    raise TimeoutError(self.last_error)
+                    message = "Timed out waiting for sampling to stop."
+                    self.last_error = self.last_error or message
+                    raise TimeoutError(message)
                 self._sampling_thread = None
             with self._io_lock:
                 self.data_queue = None
@@ -208,8 +210,11 @@ class DummyCamera:
         except Exception as exc:
             if not self._stop_event.is_set():
                 self.connected = False
-                self.last_error = str(exc) or type(exc).__name__
+                self.last_error = self.last_error or str(exc) or type(exc).__name__
                 self.logger.exception("Sampling failed for %s", self.device_id)
+                report_error = getattr(self.data_queue, "report_error", None)
+                if report_error is not None:
+                    report_error(self.device_id, self.last_error)
         finally:
             self._stop_event.set()
 
@@ -230,6 +235,7 @@ class DummyCamera:
             id=self.device_id, type="camera", manufacturer="DummyManufacturer",
             model="DummyCamera", serial_number=self.serial_number, address=self.address,
             status="error" if self.last_error else "connected" if self.connected else "disconnected",
+            error=self.last_error,
         )
 
     def _open_device(self) -> CameraSetting:

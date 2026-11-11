@@ -59,14 +59,13 @@ if not addr_list:
     raise Exception("接続されたデバイスが見つかりません。")
 print(addr_list)
 ```
-
 #### 表示されない場合
 
 `rm.list_resources()` が空 `()` のときは、パワーメーターの入力がWindows側でVISA(USBTMC)として認識されていない可能性がある。
 
 1. **PyVISAがNI-VISAを使っているか確認**
 
-   - `rm.visalib` のパスがNI-VISAのインストール先を指しているか確認。DLLのファイル名だけでは提供元を判別できない。
+   - `rm.visalib` が `...visa32.dll` / `...visa64.dll`（NI-VISA）になっているかを見る。
 
      ```python
      import pyvisa
@@ -76,7 +75,6 @@ print(addr_list)
      print("Resources:", rm.list_resources())  # 一覧
      print("USB only:", rm.list_resources("USB?*::INSTR"))
      print("ASRL only:", rm.list_resources("ASRL?*::INSTR"))
-      rm.close()
      ```
 
 2. **デバイスマネージャーで認識状態を確認**
@@ -89,11 +87,11 @@ print(addr_list)
 
    - NI-MAX 側に機器が出ない場合、OSがOPMの入力をNI-VISA(USBTMC)として掴めていない。
 
-4. **Power Meter Driver SwitcherでVISA用のドライバーに切り替える**
+4. **Driver Switcher で WinUSB → NI-VISA に切り替える**
 
-   - OPM付属の **Power Meter Driver Switcher** を起動し、対象機器をVISA（USBTMC）で使う設定に切り替える。
+   - OPM（Optical Power Monitor）付属の **Driver Switcher** を起動し、対象機器のドライバを **NI-VISA(USBTMC)** 側へ切り替える。
    - スタートメニューから **Driver Switcher** を検索して起動。
-   - PyLabLibの[公式導入資料](https://pylablib.readthedocs.io/en/stable/devices/Thorlabs_pm.html)では **PM100Dモード** と記載。機種名がPM160でも、この名称を使う。画面の項目名はOPMのバージョンによって確認する。
+   - 対象デバイスを選択し、Dribar が **WinUSB** になっている場合は **NI-VISA** に切り替え。
    * 切り替え後に **USB抜き差し**（必要ならPC再起動）。
    * これで `USB0::0x1313::...::INSTR` のような形式で `list_resources()` に出るようになる。
 
@@ -101,17 +99,14 @@ print(addr_list)
 
    * OPM（＋SDK）と NI-VISA Runtime を **修復インストール / 再インストール**。
    * USBハブを避けて直結、別USBポートで試す。
-   * 以前は認識できていた場合も、使用中のドライバーとDriver Switcherの設定を再確認する。
+   * Windows Update 後などに WinUSB 側へ戻ることがあるため、その場合は 4 を再実施する。
 
-
-
-
-## 4.2 PM160 クラス
+## 4.2 PM160 クラス ( or GenericPM クラス)
 
 **PM160(addr)** [ドキュメント](https://pylablib.readthedocs.io/en/stable/.apidoc/pylablib.devices.Thorlabs.html#pylablib.devices.Thorlabs.misc.PM160)
+
 - Thorlabs OPM PM160/PM100Aを制御するクラス
 - `addr` : VISAアドレス（文字列）
-
 
 ```python
 from pylablib.devices.Thorlabs.misc import PM160
@@ -120,6 +115,10 @@ addr = addr_list[0]  # 一覧で対象機器を確認し、複数ある場合は
 pm = PM160(addr)
 pm.close()  # デバイスを閉じる
 ```
+
+> GenericPM クラスは光パワーメータ共通の制御機能を実装するクラスです。
+> PylablibsではGenericPMクラスを継承したデバイスごとのクラスで、デバイス固有の機能を追加実装しています。
+> PM160 クラスの場合は固有機能が実装されていないため、GenericPM クラスでも同じ操作が可能です。
 
 ## 4.3 よく使うメソッド・プロパティ
 

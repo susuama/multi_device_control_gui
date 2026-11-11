@@ -99,6 +99,7 @@ class DataRecorder:
                 server_instance_id=self.server_instance_id,
                 recording_id=self._recording_id,
                 measurement_id=self._measurement_id,
+                recording_stopped_at=self._recording_stopped_at,
                 targets=deepcopy(self._targets),
                 is_recording=self._is_recording,
                 is_stopping=self._is_stopping,
@@ -682,10 +683,11 @@ class VideoRecorder:
             output_format = "gray" if monochrome else "rgb24"
             codec = ["-c:v", encoder, "-preset", "veryfast", "-qp", "0", "-pix_fmt", output_format, "-color_range", "pc"]
         elif self.options.format == "ffv1":
-            # FFV1は一つのスライスを使い、CRCによる破損検出情報を付ける。
+            # 小ROIは1スライスで画素欠落を避け、FFmpeg 7.0.2が1を拒否する寸法では自動選択する。
+            slices = "1" if self.width <= 352 and self.height <= 288 else "0"
             # カラーはRGB成分を保持するbgr0で出力し、入力RGB/BGRの並び替えはFFmpegへ任せる。
             output_format = "gray" if monochrome else "bgr0"
-            codec = ["-c:v", "ffv1", "-level", "3", "-slices", "1", "-slicecrc", "1", "-pix_fmt", output_format]
+            codec = ["-c:v", "ffv1", "-level", "3", "-slices", slices, "-slicecrc", "1", "-pix_fmt", output_format]
         else:
             # MPEG-4は非可逆保存として、エンコーダーに対応するYUV形式を使う。
             codec = ["-c:v", "mpeg4", "-vtag", "mp4v", "-q:v", "2", "-pix_fmt", "yuv420p"]

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { createBackendStore } from "../src/state/backendStore.ts";
+import { getOperationAvailability } from "../src/state/operationPolicy.ts";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -9,6 +10,98 @@ const settings = (gain = 1) => ({ width: 640, height: 480, fps: 10, exposure: 0.
 const recording = (changes = {}) => ({ server_instance_id: "server", recording_id: null, measurement_id: null, targets: {}, is_recording: false, is_stopping: false, directory: null, name: null, error: null, ...changes });
 const measurement = (changes = {}) => ({ server_instance_id: "server", measurement_id: "measurement", started_at: "2026-11-02T00:00:00Z", sampling_device_ids: [], error: null, ...changes });
 const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
+
+test("停止待ちのエラー機器も状態として受け入れ、切断で復旧できる", async () => {
+    const store = createBackendStore();
+    let failed = true;
+    globalThis.fetch = async (url, options) => {
+        const path = new URL(String(url), "http://test").pathname;
+        if (path.endsWith("/disconnect") && options?.method === "POST") {
+            failed = false;
+            return Response.json({ success: true });
+        }
+        const info = { ...device(failed ? "error" : "disconnected"), error: failed ? "USB read failed" : null };
+        if (path === "/api/devices") return Response.json([info]);
+        if (path === "/api/devices/camera") return Response.json(info);
+        if (path === "/api/measurements/status") return Response.json(measurement({ sampling_device_ids: failed ? ["camera"] : [] }));
+        if (path === "/api/recordings/status") return Response.json(recording());
+        throw new Error(`Unexpected request: ${path}`);
+    };
+    await store.refresh();
+    assert.equal(store.getSnapshot().synchronization.status, "ready");
+    assert.equal(store.getSnapshot().devices[0].error, "USB read failed");
+    await store.disconnectDevice("camera");
+    assert.equal(store.getSnapshot().devices[0].status, "disconnected");
+    assert.equal(store.getSnapshot().devices[0].error, null);
+});
+
+test("探索応答を一覧へ直接格納せず、管理用の機器一覧を再取得する", async () => {
+    const store = createBackendStore();
+    const calls = [];
+    const discovered = { driver: "UC480", type: "camera", manufacturer: "Thorlabs", model: "C1285R12M", serial_number: "123", address: "7" };
+    const listed = { ...device("disconnected"), model: "C1285R12M" };
+    globalThis.fetch = async (url, options) => {
+        const path = new URL(String(url), "http://test").pathname;
+        calls.push([path, options?.method ?? "GET"]);
+        if (path === "/api/devices/scan") return Response.json([discovered]);
+        if (path === "/api/devices") return Response.json([listed]);
+        throw new Error(`Unexpected request: ${path}`);
+    };
+    await store.scanDevices();
+    assert.deepEqual(calls, [["/api/devices/scan", "POST"], ["/api/devices", "GET"]]);
+    assert.deepEqual(store.getSnapshot().devices, [listed]);
+});
+
+test("確認済み状態は再取得中も維持し、操作可否を切り替えない", async () => {
+    const store = createBackendStore(); globalThis.fetch = server();
+    await store.refresh();
+    const confirmed = store.getSnapshot();
+    const gate = deferred();
+    globalThis.fetch = server({ "/api/measurements/status": async () => { await gate.promise; return Response.json(measurement()); } });
+    const states = [];
+    const off = store.subscribe(() => states.push(store.getSnapshot().synchronization.status));
+    const pending = store.refresh();
+    assert.equal(store.getSnapshot(), confirmed);
+    assert.equal(getOperationAvailability(store.getSnapshot(), { operation: "updateSettings", deviceId: "camera", settings: settings(2) }).allowed, true);
+    gate.resolve(); await pending; off();
+    assert.ok(states.every(status => status === "ready"));
+});
+
+test("再取得中に設定を変更しても古い一括GETで適用済み値へ戻さない", async () => {
+    const store = createBackendStore(); globalThis.fetch = server(); await store.refresh();
+    const gate = deferred(), started = deferred(), applied = deferred();
+    let gain = 1, reads = 0;
+    globalThis.fetch = server({ "/api/devices/camera/settings": async options => {
+        if (options.method === "PUT") { gain = 2; applied.resolve(); return Response.json(settings(gain)); }
+        const captured = settings(gain);
+        if (++reads === 1) { started.resolve(); await gate.promise; }
+        return Response.json(captured);
+    } });
+    const observed = [];
+    store.subscribe(() => observed.push(store.getSnapshot().settings.camera.gain));
+    const refresh = store.refresh(); await started.promise;
+    const write = store.updateSettings("camera", settings(2)); await applied.promise;
+    gate.resolve(); await Promise.all([refresh, write]);
+    assert.equal(store.getSnapshot().settings.camera.gain, 2);
+    assert.ok(reads >= 2);
+    assert.ok(observed.slice(observed.indexOf(2)).every(value => value === 2));
+});
+
+test("同期エラーは再取得の成功まで保持し、再試行中も操作を禁止する", async () => {
+    const store = createBackendStore(); globalThis.fetch = server(); await store.refresh();
+    globalThis.fetch = server({ "/api/measurements/status": () => { throw new Error("試験用の通信断"); } });
+    await assert.rejects(store.refresh(), /通信断/);
+    const error = store.getSnapshot().synchronization.error;
+    const gate = deferred();
+    globalThis.fetch = server({ "/api/measurements/status": async () => { await gate.promise; return Response.json(measurement()); } });
+    const retry = store.refresh();
+    assert.equal(store.getSnapshot().synchronization.status, "error");
+    assert.equal(store.getSnapshot().synchronization.error, error);
+    assert.equal(getOperationAvailability(store.getSnapshot(), { operation: "updateSettings", deviceId: "camera", settings: settings(2) }).allowed, false);
+    gate.resolve(); await retry;
+    assert.equal(store.getSnapshot().synchronization.status, "ready");
+    assert.equal(store.getSnapshot().synchronization.error, "");
+});
 function server(overrides = {}) {
     return async (path, options) => {
         if (overrides[path]) return overrides[path](options);
@@ -29,6 +122,30 @@ test("全体取得は同じPromiseを共有し、設定と測定の取得対象�
     assert.equal(store.getSnapshot().synchronization.status, "ready");
     assert.equal(store.getSnapshot().sampling.camera, true);
     assert.equal(store.getSnapshot().settings.camera.fps, 10);
+});
+
+test("未登録の接続機器は同期エラーとし、他機器の最後の確定設定を保持する", async () => {
+    const store = createBackendStore();
+    globalThis.fetch = server();
+    await store.refresh();
+    const confirmed = store.getSnapshot().settings.camera;
+    globalThis.fetch = server({ "/api/devices": () => Response.json([device(), { ...device(), id: "other", type: "unknown" }]) });
+    await assert.rejects(store.refresh(), /未対応の機器種類/);
+    assert.equal(store.getSnapshot().synchronization.status, "error");
+    assert.equal(store.getSnapshot().settings.camera, confirmed);
+    assert.equal(store.getSnapshot().settings.other, undefined);
+});
+
+test("個別の設定GETとPUT応答にも機器別検証を適用し、不正な成功応答を確定しない", async () => {
+    const store = createBackendStore();
+    globalThis.fetch = server();
+    await store.refresh();
+    globalThis.fetch = server({ "/api/devices/camera/settings": () => Response.json({ wrong: true }) });
+    await assert.rejects(store.refreshSettings("camera"), /カメラ設定/);
+    assert.equal(store.getSnapshot().settings.camera.gain, 1);
+    await assert.rejects(store.updateSettings("camera", settings(2)), /カメラ設定/);
+    assert.equal(store.getSnapshot().settings.camera.gain, 1);
+    assert.equal(store.getSnapshot().requests["device:camera/settings"].outcomeUnknown, true);
 });
 
 test("初期化前の書込みを拒否し、個別読み取りは旧APIでも維持する", async () => {

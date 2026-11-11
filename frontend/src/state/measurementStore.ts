@@ -1,9 +1,9 @@
-import type { CameraPreviewEvent, MeasurementEvent, ReceivedEvent } from "../type/event.ts";
+import type { CameraPreviewEvent, ReceivedEvent } from "../type/event.ts";
+import { createMeasurementHistory, type MeasurementHistory } from "./measurementHistory.ts";
 
-export const MEASUREMENT_LIMIT = 1000;
 export type StreamState = Readonly<{ connected: boolean; sampling: boolean; lastReceivedAt: number | null; stale: boolean }>;
 export type DataSnapshot = Readonly<{
-    measurements: Readonly<Record<string, readonly MeasurementEvent[]>>;
+    measurements: Readonly<Record<string, MeasurementHistory>>;
     previews: Readonly<Record<string, CameraPreviewEvent>>;
     session: { server_instance_id: string; measurement_id: string | null } | null;
     needsResync: boolean;
@@ -12,6 +12,7 @@ export type DataSnapshot = Readonly<{
 
 /** 確認済み測定期間の数値履歴と最新画像を共有する。 */
 export function createMeasurementStore() {
+    const histories = new Map<string, ReturnType<typeof createMeasurementHistory>>();
     let state: DataSnapshot = { measurements: {}, previews: {}, session: null, needsResync: false, streams: {} };
     const listeners = new Set<() => void>();
     function update(changes: Partial<DataSnapshot>) {
@@ -27,6 +28,7 @@ export function createMeasurementStore() {
         setSession(serverInstanceId: string, measurementId: string | null) {
             const same = state.session?.server_instance_id === serverInstanceId && state.session?.measurement_id === measurementId;
             if (same && !state.needsResync) return;
+            if (!same) histories.clear();
             update({ session: { server_instance_id: serverInstanceId, measurement_id: measurementId }, needsResync: false,
                 ...(!same ? { measurements: {}, previews: {}, streams: Object.fromEntries(Object.entries(state.streams)
                     .map(([id, stream]) => [id, { ...stream, lastReceivedAt: null, stale: true }])) } : {}) });
@@ -60,7 +62,9 @@ export function createMeasurementStore() {
             const previous = state.streams[event.id] ?? { connected: false, sampling: false };
             const streams = { ...state.streams, [event.id]: { ...previous, lastReceivedAt: Date.now(), stale: !previous.connected || !previous.sampling } };
             if (event.type === "measurement") {
-                update({ streams, measurements: { ...state.measurements, [event.id]: [...(state.measurements[event.id] ?? []), event].slice(-MEASUREMENT_LIMIT) } });
+                let history = histories.get(event.id);
+                if (!history) { history = createMeasurementHistory(); histories.set(event.id, history); }
+                update({ streams, measurements: { ...state.measurements, [event.id]: history.append(event) } });
             } else update({ streams, previews: { ...state.previews, [event.id]: event } });
             return true;
         },

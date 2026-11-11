@@ -115,6 +115,12 @@ export function createBackendStore() {
         });
     }
 
+    function putSettings(id: string, value: DeviceSettings) {
+        const type = state.devices?.find((device) => device.id === id)?.type ?? "";
+        devicesApi.validateDeviceSettings(value, type);
+        update({ settings: { ...state.settings, [id]: value } });
+    }
+
     function validateRecording(value: RecordingStatus, serverInstanceId: string | null) {
         recordingsApi.validateRecordingStatus(value);
         if (serverInstanceId !== null && value.server_instance_id !== serverInstanceId) {
@@ -136,16 +142,19 @@ export function createBackendStore() {
         refreshDevices: () => run("devices", "list", devicesApi.getDevices, putDevices),
         scanDevices() {
             invalidate("devices");
-            return run("devices", "scan", devicesApi.scanDevices, (devices) => {
+            return run("devices", "scan", async () => {
+                await devicesApi.scanDevices();
+                return devicesApi.getDevices();
+            }, (devices) => {
                 invalidate("devices");
                 putDevices(devices);
             });
         },
         refreshDevice: (id: string) => run(`device:${id}`, "info", () => devicesApi.getDevice(id), putDevice),
         refreshSettings: (id: string) => run(`device:${id}`, "settings", () => devicesApi.getDeviceSettings(id),
-            (value) => update({ settings: { ...state.settings, [id]: value } })),
+            (value) => putSettings(id, value)),
         updateSettings: (id: string, settings: DeviceSettings) => run(`device:${id}`, "settings", () => devicesApi.updateDeviceSettings(id, settings),
-            (value) => update({ settings: { ...state.settings, [id]: value } }), true, settings),
+            (value) => putSettings(id, value), true, settings),
         refreshSampling: (id: string) => run(`device:${id}`, "sampling", () => devicesApi.getSamplingStatus(id),
             (value) => update({ sampling: { ...state.sampling, [id]: value.is_sampling } })),
         connectDevice: (id: string) => run(`device:${id}`, "connect", async () => {
@@ -187,7 +196,11 @@ export function createBackendStore() {
             void deviceId;
             if (refreshing) return refreshing;
             const perform = async () => {
-                update({ synchronization: { ...state.synchronization, status: "refreshing", error: "" } });
+                // 通常の再取得では確定状態を維持し、初回取得だけを未確認として扱う。
+                // エラーも再取得成功まで残し、再試行ごとに表示を消さない。
+                if (state.synchronization.status === "uninitialized") {
+                    update({ synchronization: { ...state.synchronization, status: "refreshing" } });
+                }
                 try {
                     let revision: number;
                     do {
@@ -200,11 +213,12 @@ export function createBackendStore() {
                         ]);
                         validateRecording(recording, measurement.server_instance_id);
                         if (!Array.isArray(devices) || devices.some((device) => !device || [device.id, device.type, device.manufacturer, device.model, device.serial_number, device.address].some((value) => typeof value !== "string") || !device.id
-                            || !["connected", "disconnected", "error"].includes(device.status))
+                            || !["connected", "disconnected", "error"].includes(device.status)
+                            || !(device.error === undefined || device.error === null || typeof device.error === "string"))
                             || new Set(devices.map((device) => device.id)).size !== devices.length) {
                             throw new UnsupportedApiContractError("機器一覧が不正です。");
                         }
-                        if (measurement.sampling_device_ids.some((id) => !devices.some((device) => device.id === id && device.status === "connected"))) {
+                        if (measurement.sampling_device_ids.some((id) => !devices.some((device) => device.id === id && device.status !== "disconnected"))) {
                             throw new UnsupportedApiContractError("取得中の機器と機器一覧が一致しません。");
                         }
                         const entries = await Promise.all(devices.filter((device) => device.status === "connected").map(async (device) => {

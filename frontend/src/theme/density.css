@@ -1,0 +1,42 @@
+/* Theme 自身に指定し、Astryx と既存のビューで同じ寸法を継承する。 */
+.app-theme[data-density="compact"] > [data-astryx-theme] {
+    --ui-font-size: 11px;
+    --ui-font-size-small: 10px;
+    --ui-font-size-emphasis: 12px;
+    --ui-control-height: 22px;
+    --ui-chrome-height: 28px;
+    --ui-space-unit: 3px;
+}
+.app-theme[data-density="standard"] > [data-astryx-theme] {
+    --ui-font-size: 12px;
+    --ui-font-size-small: 11px;
+    --ui-font-size-emphasis: 14px;
+    --ui-control-height: 26px;
+    --ui-chrome-height: 32px;
+    --ui-space-unit: 4px;
+}
+.app-theme[data-density="comfortable"] > [data-astryx-theme] {
+    --ui-font-size: 14px;
+    --ui-font-size-small: 12px;
+    --ui-font-size-emphasis: 16px;
+    --ui-control-height: 32px;
+    --ui-chrome-height: 38px;
+    --ui-space-unit: 6px;
+}
+.app-theme > [data-astryx-theme] {
+    --font-size-base: var(--ui-font-size);
+    --font-size-sm: var(--ui-font-size-small);
+    --text-body-size: var(--ui-font-size);
+    --text-label-size: var(--ui-font-size);
+    --text-supporting-size: var(--ui-font-size-small);
+    --text-large-size: var(--ui-font-size-emphasis);
+    --size-element-sm: var(--ui-control-height);
+    --size-element-md: var(--ui-control-height);
+    --size-element-lg: calc(var(--ui-control-height) + 4px);
+    --spacing-0-5: calc(var(--ui-space-unit) / 2);
+    --spacing-1: var(--ui-space-unit);
+    --spacing-1-5: calc(var(--ui-space-unit) * 1.5);
+    --spacing-2: calc(var(--ui-space-unit) * 2);
+    --spacing-3: calc(var(--ui-space-unit) * 3);
+    --spacing-4: calc(var(--ui-space-unit) * 4);
+}

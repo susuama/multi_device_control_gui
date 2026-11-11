@@ -22,12 +22,16 @@ export function getOperationAvailability(snapshot: BackendSnapshot, request: Ope
         if (recording.is_stopping && operation === "startRecording") return deny("記録の終了処理中です。");
         if (operation === "startRecording" && recording.is_recording) return deny("記録中です。");
         if (operation === "startRecording" && snapshot.measurement.sampling_device_ids.length === 0) return deny("取得中の機器がありません。");
-        if (operation === "stopRecording" && !recording.is_recording && !recording.is_stopping) return deny("記録を開始していません。");
+        // 最終JSONだけの未保存は両フラグfalseになり得る。再停止の必要性はバックエンドで判定する。
+        if (operation === "stopRecording" && !recording.is_recording && !recording.is_stopping
+            && !(recording.recording_id && recording.error)) return deny("停止または再試行する記録がありません。");
         return { allowed: true, reason: null };
     }
     const device = snapshot.devices?.find((item) => item.id === deviceId);
     if (!device) return deny("機器が確認できません。");
-    if (operation === "connect") return device.status === "connected" ? deny("接続済みです。") : { allowed: true, reason: null };
+    if (operation === "connect") return device.status === "connected" ? deny("接続済みです。")
+        : device.status === "error" ? deny("エラーの後始末のため、先に切断してください。") : { allowed: true, reason: null };
+    if (operation === "disconnect" && device.status === "error") return { allowed: true, reason: null };
     if (device.status !== "connected") return deny("機器に接続していません。");
     if (operation === "startSampling" && snapshot.sampling[device.id]) return deny("取得中です。");
     if (operation === "stopSampling" && !snapshot.sampling[device.id]) return deny("取得を開始していません。");

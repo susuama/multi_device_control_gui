@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { LOG_LIMIT, logStore } from "../logging/logStore";
+import { formatLogEntry } from "../logging/logDisplay";
+import { createDisplayStore } from "../state/displayStore";
 
 /** 共通ログを表示する。表示件数とスクロール追従の設定は、このビューだけで保持する。 */
 export function LogView({ panelId }: { panelId: string }) {
-    const entries = useSyncExternalStore(logStore.subscribe, logStore.getSnapshot);
+    const display = useMemo(() => createDisplayStore(logStore), []);
+    const entries = useSyncExternalStore(display.subscribe, display.getSnapshot);
     const [displayLimit, setDisplayLimit] = useState(LOG_LIMIT);
     const [followTail, setFollowTail] = useState(true);
     const textArea = useRef<HTMLTextAreaElement>(null);
-    const text = useMemo(() => entries.slice(-displayLimit).map((entry) => {
-        const time = new Date(entry.timestamp).toLocaleTimeString("ja-JP", { hour12: false });
-        return `${time} ${entry.level.padEnd(5)} ${entry.source.padEnd(10)} ${entry.message}`;
-    }).join("\n"), [entries, displayLimit]);
+    const text = useMemo(() => entries.slice(-displayLimit).map(formatLogEntry).join("\n"), [entries, displayLimit]);
 
     useEffect(() => {
         if (followTail && textArea.current) textArea.current.scrollTop = textArea.current.scrollHeight;

@@ -104,15 +104,18 @@ class _SamplingQueue:
     取得開始ごとに作成し、periodは現在の測定期間が切り替わっても置き換えない。
     MeasurementManagerは開始成功時にacceptedをTrueにし、成否が確定したらreadyを通知する。
     Processorはreadyを待ち、acceptedがTrueのデータだけを処理する。
-    満杯時は機器IDを管理側へ通知する。機器の停止や終了待機はここでは行わない。
+    満杯時は機器IDを管理側へ通知する。取得失敗はreport_errorでQueueを経由せず通知する。
+    機器の停止や終了待機はここでは行わない。
     """
 
     def __init__(
         self, output: queue.Queue, period: MeasurementPeriod, *, on_queue_full: Callable[[str], None],
+        on_error: Callable[[str, str], None],
     ):
         self.output = output
         self.period = period
         self.on_queue_full = on_queue_full
+        self.report_error = on_error
         self.ready = threading.Event()
         self.accepted = False
 
@@ -190,6 +193,7 @@ class MeasurementManager:
         # 最新エラーと保存待ち一覧で、同じQueueErrorを参照する。
         # 監視スレッドが追記した取得停止失敗の説明も、状態取得側から読める。
         self._queue_errors_pending_metadata: list[QueueError] = []
+        self._device_errors_pending_metadata: list[tuple[str, dict[str, object]]] = []
         self._queue_stop_requested = False
         self._queue_stop_attempted = False  # 全取得の停止を試み終えたか。成功したことを表す値ではない。
         # 取得側の通知による起床と、監視スレッド自体の終了要求を分ける。
@@ -409,7 +413,7 @@ class MeasurementManager:
                         self._last_queue_error = None
                 if not self._data_recorder.is_recording() and not self._data_recorder.is_stopping():
                     self._start_counter_ns = get_counter_ns()
-                    self._start_datetime = get_datetime()
+                    self._start_datetime   = get_datetime()
                     new_period = MeasurementPeriod(
                         measurement_id=str(uuid4()),
                         started_at=self._start_datetime,
@@ -417,7 +421,9 @@ class MeasurementManager:
                     )
 
             output = _SamplingQueue(
-                self.data_queue, new_period or self._measurement_period, on_queue_full=self._request_queue_stop,
+                self.data_queue, new_period or self._measurement_period, 
+                on_queue_full=self._request_queue_stop,
+                on_error=self._report_acquisition_error,
             )
             try:
                 # 画像が届いたときに表示側が受け付けられるよう、カメラのプレビューを先に準備する。
@@ -584,25 +590,37 @@ class MeasurementManager:
                 with self._queue_error_lock:
                     self._queue_stop_attempted = True
 
-    def _save_queue_error_metadata(self) -> None:
-        """保存待ちのQueueエラーを消費し、記録中ならメタデータへ追加して保存する。
-
-        Processorから呼び、履歴更新の順序をデータ処理と揃える。
-        記録外でも待ち一覧は消費するが、状態取得用の最新エラーは保持する。
-        保存失敗は呼び出し元へ渡す。
-        """
-        with self._queue_error_lock:
-            if not self._queue_errors_pending_metadata:
-                return
-            errors = self._queue_errors_pending_metadata
-            self._queue_errors_pending_metadata = []
-
-        # 記録外の理由はJSONへ書かず消費する。状態取得用の最新エラーは消さない。
-        if not self._data_recorder.is_recording():
+    def _report_acquisition_error(self, device_id: str, message: str) -> None:
+        """取得スレッドからの失敗を、検出時の記録IDとともに保存待ちへ追加する。"""
+        status = self._data_recorder.get_status()
+        if not status.is_recording or device_id not in status.targets:
             return
-        with self._metadata_lock:
-            self._metadata.acquisition_errors.extend(deepcopy(error.details) for error in errors)
-        self._save_metadata()
+        details = {
+            "reason": "device_error", "device_id": device_id,
+            "detected_at": get_datetime().isoformat(), "message": message,
+        }
+        with self._queue_error_lock:
+            self._device_errors_pending_metadata.append((status.recording_id, details))
+
+    def _save_queue_error_metadata(self) -> None:
+        """Queue異常と機器の取得失敗を、対応する記録のメタデータへ保存する。"""
+        with self._queue_error_lock:
+            errors = self._queue_errors_pending_metadata
+            device_errors = self._device_errors_pending_metadata
+            self._queue_errors_pending_metadata = []
+            self._device_errors_pending_metadata = []
+        if not errors and not device_errors:
+            return
+        status = self._data_recorder.get_status()
+        if not status.is_recording:
+            return
+        details = [deepcopy(error.details) for error in errors]
+        details.extend(deepcopy(error) for recording_id, error in device_errors
+                       if recording_id == status.recording_id)
+        if details:
+            with self._metadata_lock:
+                self._metadata.acquisition_errors.extend(details)
+            self._save_metadata()
 
     def _stop_queue_monitor(self) -> None:
         """件数監視スレッドへ終了を通知し、終了確認後にスレッドの参照を外す。
@@ -820,6 +838,16 @@ class MeasurementManager:
                 errorへ追加した結果。元の保存エラーがあれば、その説明も併記する。
         """
         status = self._data_recorder.get_status()
+        with self._metadata_lock:
+            if status.directory is not None and self._metadata.path == status.directory:
+                status.recording_started_at = self._metadata.recording_started_at
+                for error in self._metadata.acquisition_errors:
+                    if error.get("reason") == "device_error":
+                        target = status.targets.get(error["device_id"])
+                        if target is not None:
+                            target.acquisition_error = str(error["message"])
+        if self._data_recorder.get_status().recording_id != status.recording_id:
+            status.recording_started_at = None
         for target in status.targets.values():
             target.locked_settings = self._get_locked_recording_settings(target.type, status.is_recording)
         message = self._queue_error_message()

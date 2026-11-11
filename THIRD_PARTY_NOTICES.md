@@ -14,8 +14,13 @@
 | Rich / AnyIO | MIT | ログ表示・非同期処理 |
 | Pillow | [MIT-CMU](https://github.com/python-pillow/Pillow/blob/13.0.0/LICENSE) | カメラプレビューのJPEG変換 |
 | HTTPX | BSD-3-Clause | APIテスト |
-| React / React DOM / Recharts | MIT | フロントエンド |
+| React / React DOM / Chart.js | MIT | フロントエンド・グラフ描画 |
+| Astryx Core / Neutral Theme / CLI | [MIT](https://github.com/meta/astryx/blob/main/LICENSE) | 共通UI部品・テーマ・テーマCSS生成 |
+| StyleX | [MIT](https://github.com/facebook/stylex/blob/main/LICENSE) | Astryxのスタイル適用 |
+| react-mosaic-component | [Apache-2.0](https://github.com/nomcopter/react-mosaic/blob/v7.2.1/LICENSE) | パネル配置・サイズ変更・並べ替え |
 | Vite / TypeScript | MIT / Apache-2.0 | 開発・ビルド |
+
+react-mosaic-component: Copyright 2019 Kevin Verdieck, originally developed at Palantir Technologies, Inc.
 
 Pythonの導入対象は `requirements.txt` と `requirements-dev.txt`、フロントエンドのバージョンとライセンス情報は `frontend/package-lock.json` に記録。間接依存にもMPL-2.0、CC-BY-4.0などのライセンスが含まれる。
 ライブラリを同梱して配布する場合は、その配布物に含まれるライセンス・著作権表示も保持する。

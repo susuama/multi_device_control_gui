@@ -20,6 +20,9 @@ htmlcov/
 
 # テスト実行で生成するCSV・メタデータ
 /backend/tests/output/
+/backend/tests/test-results/
+/test-results/
+/outputs/
 
 # Local environment settings (keep the shared example)
 .env

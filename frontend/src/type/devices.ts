@@ -3,7 +3,17 @@
 // 機器の情報や状態、機器固有の設定
 // backend側のapp/models/devices.pyと対応する
 
+export interface DiscoveredDevice {
+  driver: string;
+  type: string;
+  manufacturer: string | null;
+  model: string;
+  serial_number: string | null;
+  address: string;
+}
+
 export interface DeviceInfo {
+  error?: string | null;
   id: string;             // デバイス固有のID
   type: string;           // デバイスタイプ （カメラ、パワーメータ...）
   manufacturer: string;   // メーカー名
@@ -13,36 +23,9 @@ export interface DeviceInfo {
   status: "connected" | "disconnected" | "error";         // デバイスの状態（オンライン、オフライン、エラー...）
 }
 
-// ------------デバイスタイプごとの型仕様 ------------
-
-export interface PowerMeterSetting {
-    // パワーメータ固有の属性
-    wavelength: number;      // 波長 (nm)
-    range: number;           // 測定範囲 (W)
-    auto_range: boolean;     // 自動レンジ切替の有無
-    bandwidth: string;       // 帯域幅 (low or high)
-    averaging: number;       // (内部)平均化の点数
-}
-
-export interface CameraROI {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-}
-
-export interface CameraSetting {
-    width: number;
-    height: number;
-    fps: number;
-    exposure: number; // 秒。
-    gain: number;
-    gain_boost: boolean;
-    pixel_format: "mono8" | "rgb24" | "bgr24";
-    roi: CameraROI | null;
-}
-
-export type DeviceSettings = PowerMeterSetting | CameraSetting;
+export type { DeviceSettings } from "../devices/settingsContracts.ts";
+export type { CameraROI, CameraSetting } from "../devices/camera/settings.ts";
+export type { PowerMeterSetting } from "../devices/powerMeter/settings.ts";
 
 export interface SamplingStatus {
     is_sampling: boolean;

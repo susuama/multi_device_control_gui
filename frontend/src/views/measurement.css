@@ -1,0 +1,14 @@
+.measurement-display { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.measurement-display-options { display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-1) var(--spacing-3); padding: 0 0 var(--spacing-1-5); color: var(--muted); }
+.measurement-display-options label { white-space: nowrap; }
+.measurement-table-scroll { flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; }
+.measurement-data-table { border-collapse: separate; border-spacing: 0; width: 100%; font-variant-numeric: tabular-nums; }
+.measurement-data-table th, .measurement-data-table td { padding: calc(var(--ui-space-unit) * .75) var(--spacing-2); border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+.measurement-data-table th { position: sticky; top: 0; background: var(--header); z-index: 1; }
+.measurement-chart-area { position: relative; flex: 1; min-height: 120px; min-width: 0; }
+.graph-series-list { display: flex; flex-wrap: wrap; gap: var(--spacing-1) var(--spacing-3); margin-bottom: var(--spacing-1-5); }
+.graph-series-list > span, .graph-series-list label { display: inline-flex; align-items: center; gap: var(--spacing-1); }
+.graph-series-list i { width: 16px; height: 3px; }
+.graph-series-list button { padding: 0 var(--spacing-1); }
+.measurement-graph-content { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.measurement-graph-content > .measurement-graph { flex: 1; height: auto; min-height: 0; }

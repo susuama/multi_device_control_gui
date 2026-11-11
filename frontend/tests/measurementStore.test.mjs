@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { decodeEvent } from "../src/api/eventDecoder.ts";
-import { createMeasurementStore, MEASUREMENT_LIMIT } from "../src/state/measurementStore.ts";
+import { createMeasurementStore } from "../src/state/measurementStore.ts";
 
 const sample = (id, index) => ({ server_instance_id: "server", measurement_id: "measurement", type: "measurement", id, timestamp_ns: 1000 + index, elapsed_s: index / 10,
     datetime: "2026-11-02T00:00:00+09:00", data: { power_w: index } });
@@ -16,16 +16,17 @@ export function binaryFrame(overrides = {}) {
     return bytes.buffer;
 }
 
-test("数値履歴はデバイス別に上限を守り、複数購読者へ通知する。購読解除で消去しない", () => {
+test("数値履歴はデバイス別に全件保持し、複数購読者へ通知する。購読解除で消去しない", () => {
     const store = createMeasurementStore();
     store.setSession("server", "measurement");
     let first = 0, second = 0;
     const off = store.subscribe(() => first++);
     store.subscribe(() => second++);
-    for (let i = 0; i < MEASUREMENT_LIMIT + 3; i++) store.receive(decodeEvent(JSON.stringify(sample("meter", i))));
+    for (let i = 0; i < 72000; i++) store.receive(sample("meter", i));
     const before = store.getSnapshot();
-    assert.equal(before.measurements.meter.length, MEASUREMENT_LIMIT);
-    assert.equal(before.measurements.meter[0].data.power_w, 3);
+    assert.equal(before.measurements.meter.length, 72000);
+    assert.equal(before.measurements.meter.at(0).data.power_w, 0);
+    assert.equal(before.measurements.meter.at(-1).data.power_w, 71999);
     assert.equal(first, second);
     off();
     store.receive(sample("other", 100));

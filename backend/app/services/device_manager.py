@@ -4,7 +4,7 @@
 
 import threading
 
-from backend.app.models.devices import DiscoveredDevice
+from backend.app.models.devices import DeviceInfo, DiscoveredDevice
 from backend.app.utils.logging_utils import setup_logger
 
 
@@ -16,6 +16,7 @@ class DeviceManager:
     def __init__(self, device_classes: list[type]):
         self.devices = {}   # キーはデバイスID、値はデバイスオブジェクト
         self.device_classes = device_classes
+        self._discovered: dict[str, DiscoveredDevice] = {}
 
         self._lock = threading.RLock()      # デバイスの登録・取得を同期する
         self._scan_lock = threading.Lock()  # 複数のscan()が同時に実行されることを防ぐ
@@ -23,9 +24,12 @@ class DeviceManager:
         # ロガーの初期化
         self.logger = setup_logger(__class__.__name__)
 
-    def scan(self) -> None:
+    def scan(self) -> list[DiscoveredDevice]:
         """
-        登録されたすべての種類のデバイスを検索する。
+        管理対象と探索情報を更新し、今回検出した機器を返す。
+
+        Returns:
+            list[DiscoveredDevice]: 今回の探索結果。管理用のIDや接続状態は含まない。
         """
         with self._scan_lock:
             discovered = []
@@ -34,6 +38,7 @@ class DeviceManager:
                 discovered.extend(device_class.scan())
 
             self._update_devices(discovered)
+            return discovered
 
     def _update_devices(self, discovered_devices: list[DiscoveredDevice]) -> None:
         """
@@ -73,8 +78,11 @@ class DeviceManager:
 
             else:
                 # 使用中の通信先を変えないよう、停止・切断済みの機器だけ更新する。
-                if device.get_info().status == "disconnected" and not device.is_sampling():
+                if not device.connected and not device.last_error and not device.is_sampling():
                     device.update_address(discovered.address)
+
+            with self._lock:
+                self._discovered[device_id] = discovered.model_copy(deep=True)
 
         # 今回のscanで検出されなかったデバイスを切断する
         errors = []
@@ -154,6 +162,7 @@ class DeviceManager:
             # disconnect中に別インスタンスへ置き換わっていないことを確認する
             if self.devices.get(device_id) is device:
                 self.devices.pop(device_id)
+                self._discovered.pop(device_id, None)
 
     def get(self, device_id: str):
         """
@@ -235,12 +244,31 @@ class DeviceManager:
 
     # ...............................................................
 
-    def get_info(self, device_id: str):
+    def get_info(self, device_id: str) -> DeviceInfo:
         """
-        指定されたデバイスの情報を取得する。
+        未接続時は探索情報と管理状態、接続後はデバイスの情報を返す。
         """
         device = self.get(device_id)
-        return device.get_info()
+        if device.connected:
+            return device.get_info()
+
+        with self._lock:
+            discovered = self._discovered.get(device_id)
+
+        # register()で直接登録された機器には探索情報がないため、機器自身の情報を使う。
+        if discovered is None:
+            return device.get_info()
+
+        return DeviceInfo(
+            id=device_id,
+            type=discovered.type,
+            manufacturer=discovered.manufacturer or "",
+            model=discovered.model,
+            serial_number=discovered.serial_number or "",
+            address=device.address,
+            status="error" if device.last_error else "disconnected",
+            error=device.last_error,
+        )
 
     def read(self, device_id: str):
         """

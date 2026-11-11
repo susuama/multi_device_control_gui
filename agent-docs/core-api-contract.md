@@ -2,6 +2,8 @@
 
 作成日：2026-11-02
 
+2026-11-08確認：以下の「要求仕様」「不足API」「担当取消」は作成当時の経緯を含む。現在のbackend/app/main.pyは測定状態・記録・イベントAPIを登録済みで、通常の測定・記録ビューも同じ契約を利用する。終了時の最終JSON保存失敗では両状態フラグがfalseでも停止再試行が必要になる場合がある。再試行成功後も過去のerrorは保持されるため、errorの有無から未解放リソースや保存完了を推測しない。
+
 状態：2026-11-02の最新指示により、サブエージェントのバックエンド変更は取り消す。フロントエンドを本書の将来API契約に合わせて先行実装し、不足APIは後から実装する。
 
 本書のバックエンド部分は要求仕様であり、現在のAPIが対応済みであることを意味しない。フロントエンドは契約に対応したモックで検証し、現行APIの不足はunsupportedとして明示する。IDや対象情報をフロント側で捏造しない。
@@ -93,6 +95,7 @@
       "video_options": { "format": "ffv1" },
       "state": "recording",
       "error": null,
+      "acquisition_error": null,
       "locked_settings": ["fps", "roi"]
     }
   }
@@ -112,6 +115,7 @@
 - `targets[id].video_options`：開始時の動画保存形式。カメラ以外はnull。
 - `targets[id].state`：下表の保存側の状態。
 - `targets[id].error`：当該対象の保存処理が保持する失敗理由。失敗でなければnull。
+- `targets[id].acquisition_error`：その記録中に発生した機器の取得失敗理由。取得失敗がなければnull。機器の切断・再接続後も、その記録の履歴として保持する。保存状態のstate・errorとは独立する。
 - `targets[id].locked_settings`：当該対象で、既存の設定更新APIが現在変更を拒否する設定名の配列。現行の制限対象カメラでは `["fps", "roi"]`、制限がなければ空配列。記録状態の見た目から推測せず、実際の検証条件と一致させる。
 
 | `state` | 意味 |
@@ -252,6 +256,7 @@ API実装確認後、メインエージェントがA・B・Cの公開関数と�
 - `MeasurementStatus` は新APIと同じ項目を持ち、`MeasurementEvent`・`CameraPreviewMetadata` に必須のserver_instance_id/measurement_idを追加する。RecordingStatusは第4節の契約に合わせる。
 - backendStoreの既存のgetSnapshot/subscribeと操作メソッドを維持する。snapshotに `measurement: MeasurementStatus | null` と `synchronization: { status: "uninitialized" | "refreshing" | "ready" | "error"; lastUpdatedAt: number | null; error: string }` を追加する。
 - `refresh(): Promise<void>` が機器一覧、接続済み機器の設定、測定状態、記録状態を取得・検証する。起動IDが一致しない応答を同じ現在値として確定しない。samplingは測定状態のsampling_device_idsから作る。
+- `synchronization.status`は確定状態の有効性を表す。初回取得だけを`refreshing`とし、確認済みの通常状態は周期・手動の再取得中も`ready`を維持する。エラーは再取得成功まで保持し、再試行開始時に消さない。再取得中に操作が行われた場合、世代の変化を検出して古い応答を破棄し、最新状態を取り直す。
 - 操作後に必要な確定値を再取得する。操作の重複、遅い応答、対象ごとのエラーを管理する。requestsの各値に `outcomeUnknown: boolean` を追加し、結果不明を通常の失敗と区別する。
 - operationPolicyは `getOperationAvailability(snapshot, { operation, deviceId?, settings? }): { allowed: boolean; reason: string | null }` をexportする。operationはconnect/disconnect/startSampling/stopSampling/startRecording/stopRecording/updateSettings。初期化・鮮度・処理中・取得/記録・locked_settingsに基づいて判定し、バックエンドを最終判定とする。
 - 操作メソッドも共通判定に従う。読み取り関数は初期化前にも使える。書き込みは初期化済みの状態を前提にする。
@@ -276,3 +281,12 @@ API実装確認後、メインエージェントがA・B・Cの公開関数と�
 - main.tsxからruntimeを1回起動し、pagehide/HMR時にdisposeと通信の回収を行う。React StrictModeの表示用mount/unmountと運転の開始停止を結び付けない。
 - AppはpreferencesStoreの配色を表示し、APIテストの入力・操作は共通状態管理へ接続する。状態表示にruntimeのphase、鮮度、結果不明を含める。
 - UIへの新しい製品ビューや配置機能は追加しない。契約・単体・結合・ブラウザーの確認をメインが実行する。
+
+## 2026-11-11 接続監視と取得エラーの通知
+
+- `GET /api/devices` と個別機器のGETは、接続済みの実機に対して疎通確認を行う。UC480はSDKの機器一覧・機器情報、PM100Aはタイムアウト付きの識別問い合わせを使う。設定GETは保存済み設定を返す。
+- `DeviceInfo.error` は接続・取得・後始末で保持している理由（文字列またはnull）。疎通が成功しても過去の取得エラーを自動解除しない。切断でスレッド終了・リソース解放が完了したら解除する。
+- エラー状態でも切断を許可し、再接続前に後始末を行う。停止中のスレッドが残る場合はハンドルを閉じない。切断失敗は503と理由を返す。
+- `sampling_device_ids` には、エラー検出後も終了待ちの取得スレッドが一時的に含まれ得る。フロントエンドはエラー機器の停止・切断に進めるよう、これを状態として受け入れる。
+- 個別の取得失敗では他機器・Processor・記録を継続する。記録中の失敗は `metadata.json` の `acquisition_errors` に `reason: device_error`、`device_id`、`detected_at`、`message` を記録し、記録対象の `acquisition_error` に反映する。失敗検出時の記録IDを使い、次の記録へ持ち越さない。
+- カメラSDKのネイティブ関数の応答時間と実機の抜線・復旧動作は、実機で確認する必要がある。

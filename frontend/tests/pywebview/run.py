@@ -187,7 +187,7 @@ def verify_window(window, args) -> dict:
         while time.monotonic() - started < args.soak_seconds:
             time.sleep(max(0, min(30, args.soak_seconds - (time.monotonic() - started))))
             data = snapshot()
-            require(all(count <= 1000 for count in data["counts"].values()), "数値の保持上限を超えました。")
+            require(all(count >= previous["counts"].get(name, 0) for name, count in data["counts"].items()), "受信履歴が失われました。")
             require(len(data["previews"]) == 1 and metrics()["connections"] == 2, "画像か接続の保持数が異常です。")
             require(data["runtime"]["phase"] == "ready", "継続受信中に中核が利用不能です。")
             require(data["previews"]["camera"]["frame_index"] > previous["previews"]["camera"]["frame_index"]
